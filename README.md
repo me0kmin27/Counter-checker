@@ -14,6 +14,22 @@
 
 ## 실행
 
+### 자동 설치 및 로컬 프로토타입
+
+아래 명령은 `.env`와 Fernet 키를 자동 생성하고, 가상환경을 만든 뒤 개발/테스트 패키지를
+설치합니다. 로컬 프로토타입은 별도 DB 설치 없이 SQLite를 사용합니다.
+
+```bash
+make bootstrap
+make dev
+```
+
+MariaDB까지 포함한 웹 환경은 같은 `.env`를 이용해 실행할 수 있습니다.
+
+```bash
+make compose-up
+```
+
 Python 3.12와 Docker Compose가 필요합니다. 먼저 암호화 키를 만들고 서비스를 시작합니다.
 
 ```bash

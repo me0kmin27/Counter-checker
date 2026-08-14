@@ -2,10 +2,10 @@ services:
   mariadb:
     image: mariadb:11.4
     environment:
-      MARIADB_DATABASE: counter_checker
-      MARIADB_USER: counter
-      MARIADB_PASSWORD: change-me
-      MARIADB_ROOT_PASSWORD: change-root-me
+      MARIADB_DATABASE: ${DB_NAME:-counter_checker}
+      MARIADB_USER: ${DB_USER:-counter}
+      MARIADB_PASSWORD: ${DB_PASSWORD:-counter-local-only}
+      MARIADB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-root-local-only}
     volumes:
       - mariadb-data:/var/lib/mysql
     healthcheck:
@@ -16,11 +16,11 @@ services:
   web:
     build: .
     environment:
-      DATABASE_URL: mysql+pymysql://counter:change-me@mariadb:3306/counter_checker?charset=utf8mb4
+      DATABASE_URL: mysql+pymysql://${DB_USER:-counter}:${DB_PASSWORD:-counter-local-only}@mariadb:3306/${DB_NAME:-counter_checker}?charset=utf8mb4
       APP_SECRET_KEY: ${APP_SECRET_KEY:?set APP_SECRET_KEY to a Fernet key}
       POLL_INTERVAL_SECONDS: 300
     ports:
-      - "8000:8000"
+      - "${WEB_PORT:-8000}:8000"
     depends_on:
       mariadb:
         condition: service_healthy
