@@ -58,7 +58,7 @@ readiness를 분리하여 DB/queue 장애 시 신규 traffic을 안전하게 제
 
 ## 백업과 복구
 
-PostgreSQL point-in-time recovery와 Object Storage versioning/lifecycle을 사용하고 서로 다른 장애
+MariaDB binary log 기반 point-in-time recovery와 Object Storage versioning/lifecycle을 사용하고 서로 다른 장애
 영역에 backup을 둡니다. backup 성공 알림만 신뢰하지 않고 분기별 격리 환경 복원으로 RPO/RTO를
 검증합니다. 원본과 DB의 object key/checksum 정합성을 정기 점검합니다.
 

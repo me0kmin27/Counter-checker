@@ -1,6 +1,5 @@
-__pycache__/
-*.py[cod]
-*.db
-.env
-.venv/
-.pytest_cache/
+/config/config.php
+/var/mail/*
+!/var/mail/.gitkeep
+*.log
+.phpunit.result.cache
