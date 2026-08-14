@@ -1,7 +1,7 @@
 from email.message import EmailMessage as MimeMessage
 
 from app.database import SessionLocal
-from app.models import EmailMessage, PopAccount
+from app.models import CounterReading, Device, EmailMessage, ExtractionRun, Organization, PopAccount, Site
 from app.pop_service import store_message
 from app.security import decrypt_password, encrypt_password
 
@@ -46,3 +46,25 @@ def test_store_and_view_mime_message(client):
     assert "8월 카운터" in detail.text
     assert "누적 카운터" in detail.text
     assert "counter.png" in detail.text
+
+
+def test_prototype_domain_relations(client):
+    with SessionLocal() as db:
+        organization = Organization(name="테스트 고객사", external_code="TEST-1")
+        site = Site(name="서울 사무소", organization=organization)
+        device = Device(site=site, brand="Acme", model="C100", serial_number="A-12 34",
+                        normalized_serial="A1234")
+        account = PopAccount(name="test", host="localhost", port=110, username="u",
+                             encrypted_password=encrypt_password("p"), use_ssl=False)
+        db.add_all([organization, account])
+        db.flush()
+        mime = MimeMessage()
+        mime.set_content("counter")
+        assert store_message(db, account, mime.as_bytes()) is True
+        message = db.query(EmailMessage).one()
+        run = ExtractionRun(email_id=message.id, adapter="plain", adapter_version="1", status="done")
+        reading = CounterReading(run=run, device=device, counter_type="total", value=1234,
+                                 captured_at=message.received_at, confidence=0.95)
+        db.add(reading)
+        db.commit()
+        assert db.query(CounterReading).one().device.site.organization.name == "테스트 고객사"
