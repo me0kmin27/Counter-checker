@@ -1,0 +1,28 @@
+services:
+  mariadb:
+    image: mariadb:11.4
+    environment:
+      MARIADB_DATABASE: counter_checker
+      MARIADB_USER: counter
+      MARIADB_PASSWORD: change-me
+      MARIADB_ROOT_PASSWORD: change-root-me
+    volumes:
+      - mariadb-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  web:
+    build: .
+    environment:
+      DATABASE_URL: mysql+pymysql://counter:change-me@mariadb:3306/counter_checker?charset=utf8mb4
+      APP_SECRET_KEY: ${APP_SECRET_KEY:?set APP_SECRET_KEY to a Fernet key}
+      POLL_INTERVAL_SECONDS: 300
+    ports:
+      - "8000:8000"
+    depends_on:
+      mariadb:
+        condition: service_healthy
+volumes:
+  mariadb-data:

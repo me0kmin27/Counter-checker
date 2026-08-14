@@ -1,0 +1,7 @@
+{% extends "base.html" %}{% block heading %}수집 현황{% endblock %}{% block content %}
+<section class="cards"><article><span>POP 계정</span><strong>{{ accounts }}</strong><small>등록된 수신 계정</small></article>
+<article><span>수신 메일</span><strong>{{ messages }}</strong><small>MariaDB에 안전하게 저장</small></article>
+<article><span>연결 오류</span><strong>{{ errors }}</strong><small>확인이 필요한 계정</small></article></section>
+<section class="panel"><div class="panel-title"><div><h2>최근 받은 메일</h2><p>가장 최근 저장된 5건입니다.</p></div><a class="button ghost" href="/mail">전체 보기</a></div>
+{% if latest %}<table><thead><tr><th>제목</th><th>보낸 사람</th><th>수신 시각</th><th>상태</th></tr></thead><tbody>{% for m in latest %}<tr><td><a href="/mail/{{ m.id }}">{{ m.subject or '(제목 없음)' }}</a></td><td>{{ m.sender }}</td><td>{{ m.received_at.strftime('%Y-%m-%d %H:%M') }}</td><td><span class="pill">수신 완료</span></td></tr>{% endfor %}</tbody></table>{% else %}<div class="empty"><b>아직 받은 메일이 없습니다.</b><span>POP 계정을 등록한 뒤 지금 받기를 실행하세요.</span></div>{% endif %}</section>
+{% endblock %}

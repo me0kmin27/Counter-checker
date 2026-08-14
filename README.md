@@ -1,7 +1,40 @@
 # Counter Checker
 
-복사기의 이메일 카운터 통지를 수집하고, 본문 또는 첨부 이미지에서 카운터를 추출해
-월간 사용량과 고객사별 장비 현황을 제공하기 위한 시스템의 기본 설계 저장소입니다.
+복사기의 이메일 카운터 통지를 POP3로 수집해 MariaDB에 보관하고 웹에서 확인하는 MVP입니다.
+본문/OCR 카운터 추출과 월간 사용량 정리는 다음 구현 단계로 분리되어 있습니다.
+
+## 현재 구현 범위
+
+- 웹에서 POP3 서버, 포트, SSL, 계정 및 수신 정책 등록
+- 활성 계정 5분 주기 자동 확인 및 `지금 받기` 수동 실행
+- RFC MIME 원문, 텍스트/HTML 본문, 첨부 파일과 메타데이터를 MariaDB에 저장
+- SHA-256을 이용한 계정별 중복 저장 방지
+- 받은 메일 목록/상세 본문/첨부 다운로드와 계정별 연결 오류 확인
+- POP 비밀번호 Fernet 암호화 저장
+
+## 실행
+
+Python 3.12와 Docker Compose가 필요합니다. 먼저 암호화 키를 만들고 서비스를 시작합니다.
+
+```bash
+cp .env.example .env
+python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'
+# 출력된 키를 .env의 APP_SECRET_KEY에 입력
+docker compose up --build
+```
+
+브라우저에서 `http://localhost:8000`을 열고 **POP 설정**에서 수신 계정을 등록합니다.
+운영 환경에서는 Compose 예제의 DB 비밀번호를 반드시 변경하고 웹 앞단에 인증과 TLS를
+구성해야 합니다.
+
+로컬 개발과 테스트는 다음과 같이 실행합니다.
+
+```bash
+python -m venv .venv
+. .venv/bin/activate
+pip install -r requirements-dev.txt
+APP_SECRET_KEY="$(python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())')" pytest
+```
 
 ## 목표
 
@@ -26,11 +59,11 @@
 | --- | --- | --- |
 | API/작업자 | Python 3.12, FastAPI, Celery | 이메일·이미지 생태계와 비동기 작업 지원 |
 | Web | TypeScript, Next.js | 서버 렌더링 대시보드와 타입 안정성 |
-| DB | PostgreSQL 16 | 관계형 무결성, 집계, 감사 데이터 처리 |
+| DB | MariaDB 11.4 | 웹/메일 데이터의 관계형 저장과 운영 요구사항 반영 |
 | 큐/캐시 | Redis | 작업 재시도와 중복 실행 제어 |
 | 원본 저장소 | S3 호환 Object Storage | 이메일·이미지의 불변 보관 및 수명주기 관리 |
 | OCR | 교체 가능한 Adapter | 클라우드 OCR과 자체 OCR을 정책에 따라 선택 |
-| 메일 수신 | 전용 수신 도메인 + Provider Webhook | 폴링보다 신속하고 확장 가능한 수신 |
+| 메일 수신 | POP3/POP3S | 기존 카운터 수신함과 간단히 연동 |
 
 기술 선택은 확정 계약이 아니라 초기 제안입니다. 실제 메일량, 이미지 품질, 데이터 보존
 기간, 설치 환경(클라우드/온프레미스)을 측정한 뒤 ADR로 확정합니다.
