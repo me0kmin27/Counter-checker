@@ -1,0 +1,10 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{% block title %}Counter Checker{% endblock %}</title><link rel="stylesheet" href="/static/style.css"></head>
+<body><aside><a class="brand" href="/"><span>CC</span> Counter Checker</a><nav>
+<a href="/" class="{% if request.url.path == '/' %}active{% endif %}">대시보드</a>
+<a href="/mail" class="{% if request.url.path.startswith('/mail') %}active{% endif %}">받은 메일</a>
+<a href="/settings" class="{% if request.url.path == '/settings' %}active{% endif %}">POP 설정</a>
+</nav><div class="aside-note">메일 수집 MVP<br><small>OCR 분석은 다음 단계에서 연결됩니다.</small></div></aside>
+<main><header><div><p class="eyebrow">MAIL OPERATIONS</p><h1>{% block heading %}{% endblock %}</h1></div><span class="status"><i></i> 시스템 정상</span></header>
+{% block content %}{% endblock %}</main></body></html>
