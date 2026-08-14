@@ -1,0 +1,5 @@
+/config/config.php
+/var/mail/*
+!/var/mail/.gitkeep
+*.log
+.phpunit.result.cache
