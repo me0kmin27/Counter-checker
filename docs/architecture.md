@@ -10,7 +10,7 @@ flowchart LR
     Copier[브랜드별 복사기] -->|SMTP| Mail[수신 메일 서비스]
     Mail -->|서명된 Webhook| Ingress[Mail Ingress API]
     Ingress --> Object[(원본 Object Storage)]
-    Ingress --> DB[(PostgreSQL)]
+    Ingress --> DB[(MariaDB)]
     Ingress --> Queue[(작업 Queue)]
     Queue --> Detect[브랜드/형식 판별]
     Detect --> Text[본문 Parser]
@@ -27,11 +27,11 @@ flowchart LR
 
 ### Mail Ingress API
 
-- Provider의 Webhook 서명을 검증하고 허용된 수신 주소인지 확인합니다.
+- POP 수신 작업 서명을 검증하고 허용된 수신 주소인지 확인합니다.
 - RFC Message-ID와 원본 SHA-256으로 중복 수신을 차단합니다.
 - MIME을 파싱하기 전 크기, 파일 개수, 허용 MIME 유형을 검사합니다.
 - 원본을 Object Storage에 먼저 보관하고 DB transaction/outbox로 작업을 발행합니다.
-- Webhook에는 빠르게 성공을 응답하고 OCR은 동기 실행하지 않습니다.
+- POP 수신 작업은 원문 저장까지만 수행하며 OCR은 동기 실행하지 않습니다.
 
 ### Extract Worker
 
