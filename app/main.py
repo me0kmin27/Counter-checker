@@ -10,7 +10,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
-from .database import Base, SessionLocal, engine, get_db
+from .database import Base, SessionLocal, engine, ensure_compatibility_schema, get_db
 from .models import Attachment, EmailMessage, PopAccount
 from .pop_service import fetch_account
 from .security import encrypt_password
@@ -23,6 +23,16 @@ def _validate_account(name: str, host: str, port: int, username: str) -> tuple[s
     if any(character.isspace() for character in host):
         raise HTTPException(422, "POP 서버 주소에는 공백을 사용할 수 없습니다.")
     return name, host, username
+
+
+def _validate_mail_options(smtp_security_mode: str, smtp_auth_method: str,
+                           smtp_port: int, smtp_timeout: int):
+    if smtp_security_mode not in {"auto", "ssl", "starttls"}:
+        raise HTTPException(422, "SMTP 암호화 방법을 올바르게 선택하세요.")
+    if smtp_auth_method not in {"same_as_pop", "credentials", "pop_before_smtp"}:
+        raise HTTPException(422, "SMTP 인증 방법을 올바르게 선택하세요.")
+    if not 1 <= smtp_port <= 65535 or not 1 <= smtp_timeout <= 300:
+        raise HTTPException(422, "SMTP 포트와 타임아웃을 올바르게 입력하세요.")
 
 
 async def poll_loop():
@@ -41,6 +51,7 @@ async def poll_loop():
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     Base.metadata.create_all(engine)
+    ensure_compatibility_schema()
     task = asyncio.create_task(poll_loop())
     yield
     task.cancel()
@@ -85,13 +96,26 @@ def settings(request: Request, db: Session = Depends(get_db)):
 def add_account(
     name: str = Form(...), host: str = Form(...), port: int = Form(995),
     username: str = Form(...), password: str = Form(...),
-    use_ssl: bool = Form(False), enabled: bool = Form(False),
+    use_ssl: bool = Form(False), pop_require_spa: bool = Form(False),
+    smtp_host: str = Form(""), smtp_port: int = Form(587),
+    smtp_security_mode: str = Form("auto"), smtp_timeout: int = Form(30),
+    smtp_require_spa: bool = Form(False), smtp_auth_required: bool = Form(False),
+    smtp_auth_method: str = Form("same_as_pop"), smtp_username: str = Form(""),
+    smtp_password: str = Form(""), enabled: bool = Form(False),
     delete_after_receive: bool = Form(False), db: Session = Depends(get_db),
 ):
     name, host, username = _validate_account(name, host, port, username)
+    _validate_mail_options(smtp_security_mode, smtp_auth_method, smtp_port, smtp_timeout)
     account = PopAccount(
         name=name, host=host, port=port, username=username,
-        encrypted_password=encrypt_password(password), use_ssl=use_ssl, enabled=enabled,
+        encrypted_password=encrypt_password(password), use_ssl=use_ssl,
+        security_mode="ssl" if use_ssl else "starttls", pop_require_spa=pop_require_spa,
+        smtp_host=smtp_host.strip() or None, smtp_port=smtp_port,
+        smtp_security_mode=smtp_security_mode, smtp_timeout=smtp_timeout,
+        smtp_require_spa=smtp_require_spa, smtp_auth_required=smtp_auth_required,
+        smtp_auth_method=smtp_auth_method, smtp_username=smtp_username.strip() or None,
+        encrypted_smtp_password=encrypt_password(smtp_password) if smtp_password else None,
+        enabled=enabled,
         delete_after_receive=delete_after_receive,
     )
     db.add(account)
@@ -103,6 +127,11 @@ def add_account(
 def update_account(
     account_id: int, name: str = Form(...), host: str = Form(...), port: int = Form(...),
     username: str = Form(...), password: str = Form(""), use_ssl: bool = Form(False),
+    pop_require_spa: bool = Form(False), smtp_host: str = Form(""), smtp_port: int = Form(587),
+    smtp_security_mode: str = Form("auto"), smtp_timeout: int = Form(30),
+    smtp_require_spa: bool = Form(False), smtp_auth_required: bool = Form(False),
+    smtp_auth_method: str = Form("same_as_pop"), smtp_username: str = Form(""),
+    smtp_password: str = Form(""),
     enabled: bool = Form(False), delete_after_receive: bool = Form(False),
     db: Session = Depends(get_db),
 ):
@@ -110,11 +139,20 @@ def update_account(
     if not account:
         raise HTTPException(404)
     name, host, username = _validate_account(name, host, port, username)
+    _validate_mail_options(smtp_security_mode, smtp_auth_method, smtp_port, smtp_timeout)
     account.name, account.host, account.port, account.username = name, host, port, username
-    account.use_ssl, account.enabled = use_ssl, enabled
+    account.use_ssl, account.security_mode = use_ssl, "ssl" if use_ssl else "starttls"
+    account.pop_require_spa = pop_require_spa
+    account.smtp_host, account.smtp_port = smtp_host.strip() or None, smtp_port
+    account.smtp_security_mode, account.smtp_timeout = smtp_security_mode, smtp_timeout
+    account.smtp_require_spa, account.smtp_auth_required = smtp_require_spa, smtp_auth_required
+    account.smtp_auth_method, account.smtp_username = smtp_auth_method, smtp_username.strip() or None
+    account.enabled = enabled
     account.delete_after_receive = delete_after_receive
     if password:
         account.encrypted_password = encrypt_password(password)
+    if smtp_password:
+        account.encrypted_smtp_password = encrypt_password(smtp_password)
     account.last_error = None
     db.commit()
     return RedirectResponse("/settings?notice=POP%20%EC%84%A4%EC%A0%95%EC%9D%B4%20%EC%A0%80%EC%9E%A5%EB%90%98%EC%97%88%EC%8A%B5%EB%8B%88%EB%8B%A4", status_code=303)

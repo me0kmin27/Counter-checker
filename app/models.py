@@ -5,8 +5,13 @@ from sqlalchemy import (
     Integer, JSON, LargeBinary, String, Text, UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.dialects.mysql import LONGBLOB, LONGTEXT
 
 from .database import Base
+
+
+LONG_BINARY = LargeBinary().with_variant(LONGBLOB(), "mysql")
+LONG_TEXT = Text().with_variant(LONGTEXT(), "mysql")
 
 
 class PopAccount(Base):
@@ -19,6 +24,17 @@ class PopAccount(Base):
     username: Mapped[str] = mapped_column(String(255))
     encrypted_password: Mapped[bytes] = mapped_column(LargeBinary)
     use_ssl: Mapped[bool] = mapped_column(Boolean, default=True)
+    security_mode: Mapped[str] = mapped_column(String(20), default="auto")
+    pop_require_spa: Mapped[bool] = mapped_column(Boolean, default=False)
+    smtp_host: Mapped[str | None] = mapped_column(String(255))
+    smtp_port: Mapped[int] = mapped_column(Integer, default=587)
+    smtp_security_mode: Mapped[str] = mapped_column(String(20), default="auto")
+    smtp_timeout: Mapped[int] = mapped_column(Integer, default=30)
+    smtp_require_spa: Mapped[bool] = mapped_column(Boolean, default=False)
+    smtp_auth_required: Mapped[bool] = mapped_column(Boolean, default=False)
+    smtp_auth_method: Mapped[str] = mapped_column(String(30), default="same_as_pop")
+    smtp_username: Mapped[str | None] = mapped_column(String(255))
+    encrypted_smtp_password: Mapped[bytes | None] = mapped_column(LargeBinary)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     delete_after_receive: Mapped[bool] = mapped_column(Boolean, default=False)
     last_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -42,9 +58,9 @@ class EmailMessage(Base):
     subject: Mapped[str] = mapped_column(Text, default="")
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-    text_body: Mapped[str] = mapped_column(Text, default="")
-    html_body: Mapped[str] = mapped_column(Text, default="")
-    raw_message: Mapped[bytes] = mapped_column(LargeBinary)
+    text_body: Mapped[str] = mapped_column(LONG_TEXT, default="")
+    html_body: Mapped[str] = mapped_column(LONG_TEXT, default="")
+    raw_message: Mapped[bytes] = mapped_column(LONG_BINARY)
     attachment_count: Mapped[int] = mapped_column(Integer, default=0)
     status: Mapped[str] = mapped_column(String(30), default="received")
     account: Mapped[PopAccount] = relationship(back_populates="messages")
@@ -62,7 +78,7 @@ class Attachment(Base):
     mime_type: Mapped[str] = mapped_column(String(255), default="application/octet-stream")
     size_bytes: Mapped[int] = mapped_column(Integer)
     content_sha256: Mapped[str] = mapped_column(String(64))
-    content: Mapped[bytes] = mapped_column(LargeBinary)
+    content: Mapped[bytes] = mapped_column(LONG_BINARY)
     message: Mapped[EmailMessage] = relationship(back_populates="attachments")
 
 
