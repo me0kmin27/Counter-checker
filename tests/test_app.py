@@ -68,3 +68,49 @@ def test_prototype_domain_relations(client):
         db.add(reading)
         db.commit()
         assert db.query(CounterReading).one().device.site.organization.name == "테스트 고객사"
+
+
+def test_update_pop_account_keeps_password_when_blank(client):
+    client.post("/settings", data={
+        "name": "before", "host": "pop.example.com", "port": "995",
+        "username": "user", "password": "secret", "use_ssl": "on", "enabled": "on",
+    })
+    with SessionLocal() as db:
+        account_id = db.query(PopAccount).one().id
+    response = client.post(f"/settings/{account_id}", data={
+        "name": "after", "host": "pop2.example.com", "port": "110",
+        "username": "new-user", "password": "", "enabled": "on",
+    }, follow_redirects=False)
+    assert response.status_code == 303
+    with SessionLocal() as db:
+        account = db.get(PopAccount, account_id)
+        assert (account.name, account.host, account.use_ssl) == ("after", "pop2.example.com", False)
+        assert decrypt_password(account.encrypted_password) == "secret"
+
+
+def test_mailbox_search_raw_download_and_delete(client):
+    with SessionLocal() as db:
+        account = PopAccount(name="test", host="localhost", port=110, username="u",
+                             encrypted_password=encrypt_password("p"), use_ssl=False)
+        db.add(account)
+        db.commit()
+        mime = MimeMessage()
+        mime["Subject"] = "찾을 제목"
+        mime["From"] = "sender@example.com"
+        mime.set_content("특별한 본문")
+        mime.add_attachment(b"image", maintype="image", subtype="png", filename="카운터.png")
+        raw = mime.as_bytes()
+        assert store_message(db, account, raw)
+        message = db.query(EmailMessage).one()
+        message_id = message.id
+        attachment_id = message.attachments[0].id
+
+    assert "찾을 제목" in client.get("/mail?q=특별한").text
+    assert "조건에 맞는 메일이 없습니다" in client.get("/mail?q=없음").text
+    raw_response = client.get(f"/mail/{message_id}/raw")
+    assert raw_response.content == raw
+    assert raw_response.headers["content-type"].startswith("message/rfc822")
+    attachment_response = client.get(f"/attachments/{attachment_id}")
+    assert "filename*=UTF-8''" in attachment_response.headers["content-disposition"]
+    assert client.post(f"/mail/{message_id}/delete", follow_redirects=False).status_code == 303
+    assert client.get(f"/mail/{message_id}").status_code == 404
