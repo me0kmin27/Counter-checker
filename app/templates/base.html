@@ -1,10 +1,12 @@
 <!doctype html>
 <html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>{% block title %}Counter Checker{% endblock %}</title><link rel="stylesheet" href="/static/style.css"></head>
-<body><aside><a class="brand" href="/"><span>CC</span> Counter Checker</a><nav>
-<a href="/" class="{% if request.url.path == '/' %}active{% endif %}">대시보드</a>
-<a href="/mail" class="{% if request.url.path.startswith('/mail') %}active{% endif %}">받은 메일</a>
-<a href="/settings" class="{% if request.url.path == '/settings' %}active{% endif %}">POP 설정</a>
-</nav><div class="aside-note">메일 수집 MVP<br><small>OCR 분석은 다음 단계에서 연결됩니다.</small></div></aside>
-<main><header><div><p class="eyebrow">MAIL OPERATIONS</p><h1>{% block heading %}{% endblock %}</h1></div><span class="status"><i></i> 시스템 정상</span></header>
-{% block content %}{% endblock %}</main></body></html>
+<meta name="theme-color" content="#111827"><title>{% block title %}Counter Checker{% endblock %}</title><link rel="stylesheet" href="/static/style.css"></head>
+<body><a class="skip-link" href="#main-content">본문으로 바로가기</a><aside>
+<a class="brand" href="/" aria-label="Counter Checker 홈"><span aria-hidden="true">CC</span><b>Counter Checker</b></a>
+<p class="nav-label">WORKSPACE</p><nav aria-label="주 메뉴">
+<a href="/" class="{% if request.url.path == '/' %}active{% endif %}"><span class="nav-icon" aria-hidden="true">⌂</span>대시보드</a>
+<a href="/mail" class="{% if request.url.path.startswith('/mail') %}active{% endif %}"><span class="nav-icon" aria-hidden="true">✉</span>받은 메일</a>
+<a href="/settings" class="{% if request.url.path == '/settings' %}active{% endif %}"><span class="nav-icon" aria-hidden="true">⚙</span>POP 설정</a>
+</nav><div class="aside-note"><span class="note-icon">↻</span><div><b>자동 수집 실행 중</b><small>활성 계정을 5분마다 확인합니다.</small></div></div><div class="version">COUNTER CHECKER · MVP 1.0</div></aside>
+<main id="main-content"><header><div><p class="eyebrow">MAIL OPERATIONS</p><h1>{% block heading %}{% endblock %}</h1><p class="page-description">{% block description %}{% endblock %}</p></div><span class="status {% if errors %}warning{% endif %}"><i></i>{% if errors %}확인 필요 {{ errors }}건{% else %}시스템 정상{% endif %}</span></header>
+{% block content %}{% endblock %}<footer>Counter Checker는 등록한 POP 계정의 메일을 안전하게 수집하고 보관합니다.</footer></main></body></html>

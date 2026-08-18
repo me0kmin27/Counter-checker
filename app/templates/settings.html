@@ -1,4 +1,4 @@
-{% extends "base.html" %}{% block heading %}POP 계정 설정{% endblock %}{% block content %}
+{% extends "base.html" %}{% block title %}POP 계정 설정 · Counter Checker{% endblock %}{% block heading %}POP 계정 설정{% endblock %}{% block description %}메일 수신 계정과 자동 수집 방식을 관리합니다.{% endblock %}{% block content %}
 {% if request.query_params.get('error') %}<div class="alert error">{{ request.query_params.get('error') }}</div>{% endif %}
 {% if request.query_params.get('notice') %}<div class="alert">{{ request.query_params.get('notice') }}</div>{% endif %}
 <div class="columns"><section class="panel"><div class="panel-title"><div><h2>등록 계정</h2><p>활성 계정은 주기적으로 새 메일을 확인합니다.</p></div></div>
