@@ -137,7 +137,9 @@ def fetch(account_id: int, db: Session = Depends(get_db)):
         count = fetch_account(db, account)
         return RedirectResponse(f"/mail?notice={count}%EA%B1%B4%20%EC%88%98%EC%8B%A0", status_code=303)
     except Exception:
-        return RedirectResponse("/settings?error=POP%20%EC%97%B0%EA%B2%B0%20%EC%8B%A4%ED%8C%A8", status_code=303)
+        db.refresh(account)
+        error = quote(account.last_error or "POP 연결에 실패했습니다.")
+        return RedirectResponse(f"/settings?error={error}", status_code=303)
 
 
 @app.get("/mail", response_class=HTMLResponse)

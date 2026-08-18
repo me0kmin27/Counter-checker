@@ -1,8 +1,10 @@
 from email.message import EmailMessage as MimeMessage
+import socket
+from unittest.mock import patch
 
 from app.database import SessionLocal
 from app.models import CounterReading, Device, EmailMessage, ExtractionRun, Organization, PopAccount, Site
-from app.pop_service import store_message
+from app.pop_service import describe_connection_error, store_message
 from app.security import decrypt_password, encrypt_password
 
 
@@ -86,6 +88,32 @@ def test_update_pop_account_keeps_password_when_blank(client):
         account = db.get(PopAccount, account_id)
         assert (account.name, account.host, account.use_ssl) == ("after", "pop2.example.com", False)
         assert decrypt_password(account.encrypted_password) == "secret"
+
+
+def test_fetch_failure_displays_actionable_pop_error(client):
+    client.post("/settings", data={
+        "name": "unreachable", "host": "bad.invalid", "port": "995",
+        "username": "user", "password": "secret", "use_ssl": "on",
+    })
+    with SessionLocal() as db:
+        account_id = db.query(PopAccount).one().id
+
+    with patch("app.pop_service.poplib.POP3_SSL", side_effect=socket.gaierror("not found")):
+        response = client.post(f"/settings/{account_id}/fetch", follow_redirects=False)
+
+    assert response.status_code == 303
+    assert "error=" in response.headers["location"]
+    error_page = client.get(response.headers["location"])
+    assert "POP 서버 주소를 찾을 수 없습니다" in error_page.text
+
+
+def test_pop_protocol_error_bytes_are_readable():
+    error = describe_connection_error(Exception("unknown"))
+    assert error == "POP 수신 중 오류가 발생했습니다: unknown"
+
+    import poplib
+    error = describe_connection_error(poplib.error_proto(b"-ERR invalid login"))
+    assert error == "POP 서버 응답: -ERR invalid login"
 
 
 def test_mailbox_search_raw_download_and_delete(client):
