@@ -19,6 +19,7 @@ class PopAccount(Base):
     username: Mapped[str] = mapped_column(String(255))
     encrypted_password: Mapped[bytes] = mapped_column(LargeBinary)
     use_ssl: Mapped[bool] = mapped_column(Boolean, default=True)
+    security_mode: Mapped[str] = mapped_column(String(20), default="auto")
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     delete_after_receive: Mapped[bool] = mapped_column(Boolean, default=False)
     last_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

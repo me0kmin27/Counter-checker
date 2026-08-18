@@ -10,7 +10,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
-from .database import Base, SessionLocal, engine, get_db
+from .database import Base, SessionLocal, engine, ensure_compatibility_schema, get_db
 from .models import Attachment, EmailMessage, PopAccount
 from .pop_service import fetch_account
 from .security import encrypt_password
@@ -23,6 +23,12 @@ def _validate_account(name: str, host: str, port: int, username: str) -> tuple[s
     if any(character.isspace() for character in host):
         raise HTTPException(422, "POP 서버 주소에는 공백을 사용할 수 없습니다.")
     return name, host, username
+
+
+def _validate_security_mode(security_mode: str) -> str:
+    if security_mode not in {"auto", "ssl", "starttls"}:
+        raise HTTPException(422, "POP 보안 방식을 올바르게 선택하세요.")
+    return security_mode
 
 
 async def poll_loop():
@@ -41,6 +47,7 @@ async def poll_loop():
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     Base.metadata.create_all(engine)
+    ensure_compatibility_schema()
     task = asyncio.create_task(poll_loop())
     yield
     task.cancel()
@@ -85,13 +92,15 @@ def settings(request: Request, db: Session = Depends(get_db)):
 def add_account(
     name: str = Form(...), host: str = Form(...), port: int = Form(995),
     username: str = Form(...), password: str = Form(...),
-    use_ssl: bool = Form(False), enabled: bool = Form(False),
+    security_mode: str = Form("auto"), enabled: bool = Form(False),
     delete_after_receive: bool = Form(False), db: Session = Depends(get_db),
 ):
     name, host, username = _validate_account(name, host, port, username)
+    security_mode = _validate_security_mode(security_mode)
     account = PopAccount(
         name=name, host=host, port=port, username=username,
-        encrypted_password=encrypt_password(password), use_ssl=use_ssl, enabled=enabled,
+        encrypted_password=encrypt_password(password), use_ssl=security_mode == "ssl",
+        security_mode=security_mode, enabled=enabled,
         delete_after_receive=delete_after_receive,
     )
     db.add(account)
@@ -102,7 +111,7 @@ def add_account(
 @app.post("/settings/{account_id}")
 def update_account(
     account_id: int, name: str = Form(...), host: str = Form(...), port: int = Form(...),
-    username: str = Form(...), password: str = Form(""), use_ssl: bool = Form(False),
+    username: str = Form(...), password: str = Form(""), security_mode: str = Form("auto"),
     enabled: bool = Form(False), delete_after_receive: bool = Form(False),
     db: Session = Depends(get_db),
 ):
@@ -110,8 +119,11 @@ def update_account(
     if not account:
         raise HTTPException(404)
     name, host, username = _validate_account(name, host, port, username)
+    security_mode = _validate_security_mode(security_mode)
     account.name, account.host, account.port, account.username = name, host, port, username
-    account.use_ssl, account.enabled = use_ssl, enabled
+    account.security_mode, account.use_ssl, account.enabled = (
+        security_mode, security_mode == "ssl", enabled
+    )
     account.delete_after_receive = delete_after_receive
     if password:
         account.encrypted_password = encrypt_password(password)
