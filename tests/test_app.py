@@ -771,7 +771,9 @@ def test_custom_rule_reads_only_the_named_kyocera_attachment():
         ))
     rule = BotRule(
         brand="교세라", source_type="html_attachment", serial_source_type="email",
-        attachment_filename="monthly-counter.htm", enabled=True,
+        attachment_filename="monthly-counter.htm",
+        # A stale attachment value must never be applied to an email source.
+        serial_attachment_filename="does-not-exist.htm", enabled=True,
         serial_pattern=r"Serial Number:\s*([A-Z0-9-]+)",
         total_pattern=r"Total:\s*([0-9,]+)",
     )

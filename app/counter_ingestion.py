@@ -231,10 +231,16 @@ def _custom_rule(message: EmailMessage, rules: list[BotRule]) -> ParsedCounters 
     for rule in rules:
         if not rule.enabled or (rule.subject_keyword and rule.subject_keyword.casefold() not in subject.casefold()) or (rule.sender_keyword and rule.sender_keyword.casefold() not in sender.casefold()):
             continue
-        counter_source = source_for(rule.source_type, rule.attachment_filename)
+        counter_filename = rule.attachment_filename if rule.source_type in {
+            "html_attachment", "rtf", "ocr",
+        } else None
+        serial_source_type = rule.serial_source_type or rule.source_type
+        serial_filename = None
+        if serial_source_type in {"html_attachment", "rtf", "ocr"}:
+            serial_filename = rule.serial_attachment_filename or counter_filename
+        counter_source = source_for(rule.source_type, counter_filename)
         serial_source = source_for(
-            rule.serial_source_type or rule.source_type,
-            rule.serial_attachment_filename or rule.attachment_filename,
+            serial_source_type, serial_filename,
         )
         if not counter_source and not serial_source:
             continue
