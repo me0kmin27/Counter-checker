@@ -1,3 +1,4 @@
+import errno
 import hashlib
 import poplib
 import socket
@@ -17,6 +18,57 @@ from .security import decrypt_password
 
 
 MAX_MESSAGE_BYTES = 25 * 1024 * 1024
+CONNECT_ATTEMPT_TIMEOUT_SECONDS = 5
+
+
+def _create_pop_socket(host: str, port: int, timeout: float | None) -> socket.socket:
+    """Connect over IPv4 first and fall back to IPv6 when IPv4 is unavailable."""
+    if timeout is not None and timeout <= 0:
+        raise ValueError("Non-blocking sockets are not supported")
+
+    addresses = []
+    resolution_errors = []
+    for family in (socket.AF_INET, socket.AF_INET6):
+        try:
+            addresses.extend(socket.getaddrinfo(host, port, family, socket.SOCK_STREAM))
+        except socket.gaierror as exc:
+            resolution_errors.append(exc)
+
+    if not addresses:
+        if resolution_errors:
+            raise resolution_errors[-1]
+        raise socket.gaierror(f"No address found for {host}")
+
+    connection_errors = []
+    for family, socktype, proto, _, sockaddr in addresses:
+        sock = socket.socket(family, socktype, proto)
+        try:
+            # Do not spend the entire POP timeout on the first black-holed IP.
+            # A host often has several A/AAAA records, so leave time to try them.
+            attempt_timeout = (
+                min(timeout, CONNECT_ATTEMPT_TIMEOUT_SECONDS) if timeout is not None else None
+            )
+            sock.settimeout(attempt_timeout)
+            sock.connect(sockaddr)
+            sock.settimeout(timeout)
+            return sock
+        except OSError as exc:
+            connection_errors.append(exc)
+            sock.close()
+
+    # Prefer an IPv4 error over a misleading final IPv6 ENETUNREACH error.
+    raise connection_errors[0]
+
+
+class _IPv4PreferredPOP3(poplib.POP3):
+    def _create_socket(self, timeout):
+        return _create_pop_socket(self.host, self.port, timeout)
+
+
+class _IPv4PreferredPOP3SSL(poplib.POP3_SSL):
+    def _create_socket(self, timeout):
+        sock = _create_pop_socket(self.host, self.port, timeout)
+        return self.context.wrap_socket(sock, server_hostname=self.host)
 
 
 def describe_connection_error(exc: Exception) -> str:
@@ -24,9 +76,17 @@ def describe_connection_error(exc: Exception) -> str:
     if isinstance(exc, socket.gaierror):
         detail = "POP 서버 주소를 찾을 수 없습니다. 서버 주소를 확인하세요."
     elif isinstance(exc, (TimeoutError, socket.timeout)):
-        detail = "POP 서버 연결 시간이 초과되었습니다. 주소, 포트, 방화벽을 확인하세요."
+        detail = (
+            "POP 서버의 연결 또는 응답을 기다리는 중 시간이 초과되었습니다. "
+            "POP 서버 주소와 포트, 메일 제공업체의 POP 사용 허용 여부를 확인하세요."
+        )
     elif isinstance(exc, ConnectionRefusedError):
         detail = "POP 서버가 연결을 거부했습니다. 주소와 포트를 확인하세요."
+    elif isinstance(exc, OSError) and exc.errno in (errno.ENETUNREACH, errno.EHOSTUNREACH):
+        detail = (
+            "POP 서버의 IPv4와 IPv6 주소 모두에 연결할 수 없습니다. "
+            "서버 주소와 포트가 올바른지, 실행 환경에 해당 IP 대역으로 가는 경로가 있는지 확인하세요."
+        )
     elif isinstance(exc, ssl.SSLCertVerificationError):
         detail = "POP 서버 TLS 인증서를 확인할 수 없습니다. 인증서와 서버 시간을 확인하세요."
     elif isinstance(exc, ssl.SSLError):
@@ -104,7 +164,7 @@ def store_message(db: Session, account: PopAccount, raw: bytes) -> bool:
 
 
 def fetch_account(db: Session, account: PopAccount) -> int:
-    client_type = poplib.POP3_SSL if account.use_ssl else poplib.POP3
+    client_type = _IPv4PreferredPOP3SSL if account.use_ssl else _IPv4PreferredPOP3
     client = None
     saved = 0
     try:

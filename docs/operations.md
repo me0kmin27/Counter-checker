@@ -72,6 +72,17 @@ python3 scripts/manage.py logs --help
   실행합니다.
 - **DB가 준비되지 않음**: `python3 scripts/manage.py logs --tail 100 mariadb`에서 초기화 및 인증
   오류를 확인합니다.
+- **POP 확인 시 `Network is unreachable`**: 계정이나 비밀번호를 검사하기 전에 운영 서버에서
+  POP 서버로 가는 네트워크 경로를 찾지 못한 상태입니다. 애플리케이션은 IPv4 주소를 먼저
+  시도한 뒤 연결되지 않으면 IPv6 주소도 시도합니다. `docker compose exec web python -c
+  "import socket; print(socket.getaddrinfo('POP호스트', 995))"`로 컨테이너의 DNS 확인 결과를
+  점검하고, 호스트 및 클라우드 방화벽에서 해당 POP 포트(일반적으로 SSL은 995, 비SSL은 110)의
+  외부 연결을 허용하십시오. DNS 결과가 IPv6 주소뿐인데 운영 환경이 IPv6를 지원하지 않는다면
+  메일 제공업체의 IPv4 지원 POP 호스트를 사용하거나 운영 환경에 IPv6 경로를 구성해야 합니다.
+- **POP 확인 시 연결 시간 초과**: 한 IP 주소의 연결이 응답 없이 멈춰 다른 주소를 시도하지 못하는
+  일을 방지하기 위해 각 IP 연결은 5초까지만 기다리고, 연결된 뒤의 POP 통신에는 전체 30초 제한을
+  적용합니다. 계속 시간 초과가 발생하면 메일 제공업체에서 POP 사용을 별도로 활성화해야 하는지와
+  SSL 사용 시 포트가 995인지 확인하십시오.
 - **설정 변경이 반영되지 않음**: `make stop`, `make start` 순서로 컨테이너를 다시 만듭니다.
 - **데이터까지 완전히 삭제해야 함**: `make stop`은 데이터를 보존합니다. 데이터 삭제는 복구할 수
   없으므로 백업 후에만 직접 `docker compose down --volumes`를 실행합니다.
