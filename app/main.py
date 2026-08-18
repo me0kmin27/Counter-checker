@@ -28,9 +28,12 @@ def _validate_account(name: str, host: str, port: int, username: str) -> tuple[s
     return name, host, username
 
 
-def _validate_mail_options(smtp_security_mode: str, smtp_auth_method: str,
+def _validate_mail_options(security_mode: str, smtp_security_mode: str, smtp_auth_method: str,
                            smtp_port: int, smtp_timeout: int):
-    if smtp_security_mode not in {"auto", "ssl", "starttls"}:
+    security_modes = {"auto", "ssl", "starttls", "none"}
+    if security_mode not in security_modes:
+        raise HTTPException(422, "POP 보안 연결 방식을 올바르게 선택하세요.")
+    if smtp_security_mode not in security_modes:
         raise HTTPException(422, "SMTP 암호화 방법을 올바르게 선택하세요.")
     if smtp_auth_method not in {"same_as_pop", "credentials", "pop_before_smtp"}:
         raise HTTPException(422, "SMTP 인증 방법을 올바르게 선택하세요.")
@@ -151,7 +154,8 @@ def settings(request: Request, db: Session = Depends(get_db)):
 def add_account(
     name: str = Form(...), host: str = Form(...), port: int = Form(995),
     username: str = Form(...), password: str = Form(...),
-    use_ssl: bool = Form(False), pop_require_spa: bool = Form(False),
+    use_ssl: bool = Form(False), security_mode: str | None = Form(None),
+    pop_require_spa: bool = Form(False),
     smtp_host: str = Form(""), smtp_port: int = Form(587),
     smtp_security_mode: str = Form("auto"), smtp_timeout: int = Form(30),
     smtp_require_spa: bool = Form(False), smtp_auth_required: bool = Form(False),
@@ -160,11 +164,15 @@ def add_account(
     delete_after_receive: bool = Form(False), db: Session = Depends(get_db),
 ):
     name, host, username = _validate_account(name, host, port, username)
-    _validate_mail_options(smtp_security_mode, smtp_auth_method, smtp_port, smtp_timeout)
+    # Continue to accept submissions from the former SSL checkbox-only form.
+    security_mode = security_mode or ("ssl" if use_ssl else "starttls")
+    _validate_mail_options(
+        security_mode, smtp_security_mode, smtp_auth_method, smtp_port, smtp_timeout
+    )
     account = PopAccount(
         name=name, host=host, port=port, username=username,
-        encrypted_password=encrypt_password(password), use_ssl=use_ssl,
-        security_mode="ssl" if use_ssl else "starttls", pop_require_spa=pop_require_spa,
+        encrypted_password=encrypt_password(password), use_ssl=security_mode == "ssl",
+        security_mode=security_mode, pop_require_spa=pop_require_spa,
         smtp_host=smtp_host.strip() or None, smtp_port=smtp_port,
         smtp_security_mode=smtp_security_mode, smtp_timeout=smtp_timeout,
         smtp_require_spa=smtp_require_spa, smtp_auth_required=smtp_auth_required,
@@ -182,6 +190,7 @@ def add_account(
 def update_account(
     account_id: int, name: str = Form(...), host: str = Form(...), port: int = Form(...),
     username: str = Form(...), password: str = Form(""), use_ssl: bool = Form(False),
+    security_mode: str | None = Form(None),
     pop_require_spa: bool = Form(False), smtp_host: str = Form(""), smtp_port: int = Form(587),
     smtp_security_mode: str = Form("auto"), smtp_timeout: int = Form(30),
     smtp_require_spa: bool = Form(False), smtp_auth_required: bool = Form(False),
@@ -194,9 +203,12 @@ def update_account(
     if not account:
         raise HTTPException(404)
     name, host, username = _validate_account(name, host, port, username)
-    _validate_mail_options(smtp_security_mode, smtp_auth_method, smtp_port, smtp_timeout)
+    security_mode = security_mode or ("ssl" if use_ssl else "starttls")
+    _validate_mail_options(
+        security_mode, smtp_security_mode, smtp_auth_method, smtp_port, smtp_timeout
+    )
     account.name, account.host, account.port, account.username = name, host, port, username
-    account.use_ssl, account.security_mode = use_ssl, "ssl" if use_ssl else "starttls"
+    account.use_ssl, account.security_mode = security_mode == "ssl", security_mode
     account.pop_require_spa = pop_require_spa
     account.smtp_host, account.smtp_port = smtp_host.strip() or None, smtp_port
     account.smtp_security_mode, account.smtp_timeout = smtp_security_mode, smtp_timeout

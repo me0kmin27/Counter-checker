@@ -153,6 +153,34 @@ def test_update_pop_account_keeps_password_when_blank(client):
         assert decrypt_password(account.encrypted_password) == "secret"
 
 
+def test_pop_security_mode_none_is_displayed_and_persisted(client):
+    response = client.post("/settings", data={
+        "name": "plain POP", "host": "pop.example.com", "port": "110",
+        "username": "user", "password": "secret", "security_mode": "none",
+        "smtp_security_mode": "none",
+    }, follow_redirects=False)
+
+    assert response.status_code == 303
+    with SessionLocal() as db:
+        account = db.query(PopAccount).one()
+        assert account.security_mode == "none"
+        assert account.smtp_security_mode == "none"
+        assert account.use_ssl is False
+
+    page = client.get("/settings")
+    assert page.text.count('value="none" selected') == 2
+    assert "사용 안 함" in page.text
+
+
+def test_invalid_pop_security_mode_is_rejected(client):
+    response = client.post("/settings", data={
+        "name": "invalid", "host": "pop.example.com", "port": "110",
+        "username": "user", "password": "secret", "security_mode": "plaintext",
+    })
+
+    assert response.status_code == 422
+
+
 def test_fetch_failure_displays_actionable_pop_error(client):
     client.post("/settings", data={
         "name": "unreachable", "host": "bad.invalid", "port": "995",
@@ -210,6 +238,26 @@ def test_starttls_is_negotiated_before_pop_authentication(client):
     create_context.assert_called_once_with()
     assert pop_client.method_calls.index(call.ordered_stls(context=create_context.return_value)) \
         < pop_client.method_calls.index(call.ordered_user("smtp-user"))
+
+
+def test_security_mode_none_authenticates_without_tls(client):
+    with SessionLocal() as db:
+        account = PopAccount(
+            name="Plain POP", host="pop.example.com", port=110,
+            username="user", encrypted_password=encrypt_password("secret"),
+            use_ssl=False, security_mode="none",
+        )
+        db.add(account)
+        db.commit()
+        pop_client = MagicMock()
+        pop_client.stat.return_value = (0, 0)
+
+        with patch("app.pop_service._IPv4PreferredPOP3", return_value=pop_client):
+            assert fetch_account(db, account) == 0
+
+    pop_client.stls.assert_not_called()
+    pop_client.user.assert_called_once_with("user")
+    pop_client.pass_.assert_called_once_with("secret")
 
 
 def test_pop_protocol_error_bytes_are_readable():
