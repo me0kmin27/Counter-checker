@@ -42,6 +42,20 @@ class PopAccount(Base):
     messages: Mapped[list["EmailMessage"]] = relationship(back_populates="account")
 
 
+class User(Base):
+    __tablename__ = "users"
+    __table_args__ = (CheckConstraint("role IN ('viewer', 'operator', 'admin')", name="ck_user_role"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    username: Mapped[str] = mapped_column(String(100), unique=True, index=True)
+    display_name: Mapped[str] = mapped_column(String(100))
+    password_hash: Mapped[str] = mapped_column(String(300))
+    role: Mapped[str] = mapped_column(String(20), default="viewer")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    totp_secret: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+
+
 class EmailMessage(Base):
     __tablename__ = "email_messages"
     __table_args__ = (

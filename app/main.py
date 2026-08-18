@@ -4,19 +4,25 @@ from contextlib import asynccontextmanager, suppress
 from urllib.parse import quote
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.middleware.sessions import SessionMiddleware
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from .database import Base, SessionLocal, engine, ensure_compatibility_schema, get_db
 from .models import (
     Attachment, CounterReading, Device, EmailMessage, ExtractionRun, Organization,
-    PopAccount, ProcessingEvent, Site,
+    PopAccount, ProcessingEvent, Site, User,
 )
 from .pop_service import fetch_account
-from .security import encrypt_password
+from .security import (
+    encrypt_password, hash_user_password, new_totp_secret, totp_uri, verify_totp,
+    verify_user_password,
+)
+
+ROLE_LEVEL = {"viewer": 0, "operator": 1, "admin": 2}
 
 
 def _validate_account(name: str, host: str, port: int, username: str) -> tuple[str, str, str]:
@@ -58,6 +64,13 @@ async def poll_loop():
 async def lifespan(_app: FastAPI):
     Base.metadata.create_all(engine)
     ensure_compatibility_schema()
+    with SessionLocal() as db:
+        if not db.scalar(select(func.count()).select_from(User)):
+            username, password = os.getenv("ADMIN_USERNAME"), os.getenv("ADMIN_PASSWORD")
+            if username and password:
+                db.add(User(username=username.strip(), display_name="관리자",
+                            password_hash=hash_user_password(password), role="admin"))
+                db.commit()
     task = asyncio.create_task(poll_loop())
     yield
     task.cancel()
@@ -68,6 +81,193 @@ async def lifespan(_app: FastAPI):
 app = FastAPI(title="Counter Checker", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 templates = Jinja2Templates(directory="app/templates")
+
+
+@app.middleware("http")
+async def authentication(request: Request, call_next):
+    public = request.url.path in {"/health", "/login", "/setup"} or request.url.path.startswith("/static/")
+    user = None
+    user_id = request.session.get("user_id")
+    if user_id:
+        with SessionLocal() as db:
+            user = db.get(User, user_id)
+            if not user or not user.enabled:
+                request.session.clear()
+                user = None
+    request.state.user = user
+    if not public and not user:
+        return RedirectResponse(f"/login?next={quote(request.url.path)}", status_code=303)
+    required = 2 if request.url.path.startswith("/users") else (
+        1 if request.url.path.startswith("/settings") else 0
+    )
+    if request.method == "POST" and request.url.path.startswith(("/mail", "/counters")):
+        required = max(required, 1)
+    if user and ROLE_LEVEL.get(user.role, -1) < required:
+        return PlainTextResponse("이 작업을 수행할 권한이 없습니다.", status_code=403)
+    return await call_next(request)
+
+
+# SessionMiddleware must wrap the function middleware above so request.session is
+# available while authentication is evaluated.
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=os.getenv("APP_SESSION_SECRET", os.getenv("APP_SECRET_KEY", "change-me")),
+    same_site="strict", https_only=os.getenv("SESSION_HTTPS_ONLY", "false").lower() == "true",
+    max_age=8 * 60 * 60,
+)
+
+
+@app.get("/login", response_class=HTMLResponse)
+def login_page(request: Request):
+    if request.state.user:
+        return RedirectResponse("/", status_code=303)
+    return templates.TemplateResponse(request, "login.html", {"error": None})
+
+
+@app.post("/login")
+def login(request: Request, username: str = Form(...), password: str = Form(...),
+          totp_code: str = Form(""), next: str = Form("/"), db: Session = Depends(get_db)):
+    user = db.scalar(select(User).where(User.username == username.strip()))
+    valid = user and user.enabled and verify_user_password(password, user.password_hash)
+    if valid and user.totp_secret:
+        valid = verify_totp(user.totp_secret, totp_code.strip())
+    if not valid:
+        return templates.TemplateResponse(request, "login.html", {
+            "error": "아이디, 비밀번호 또는 인증 코드를 확인하세요."
+        }, status_code=401)
+    request.session.clear()
+    request.session["user_id"] = user.id
+    destination = next if next.startswith("/") and not next.startswith("//") else "/"
+    return RedirectResponse(destination, status_code=303)
+
+
+@app.post("/logout")
+def logout(request: Request):
+    request.session.clear()
+    return RedirectResponse("/login", status_code=303)
+
+
+@app.get("/setup", response_class=HTMLResponse)
+def setup_page(request: Request, db: Session = Depends(get_db)):
+    if db.scalar(select(func.count()).select_from(User)):
+        return RedirectResponse("/login", status_code=303)
+    return templates.TemplateResponse(request, "setup.html", {"error": None})
+
+
+@app.post("/setup")
+def setup_admin(request: Request, username: str = Form(...), display_name: str = Form(...),
+                password: str = Form(...), db: Session = Depends(get_db)):
+    if db.scalar(select(func.count()).select_from(User)):
+        raise HTTPException(409, "초기 설정이 이미 완료되었습니다.")
+    try:
+        user = User(username=username.strip(), display_name=display_name.strip(),
+                    password_hash=hash_user_password(password), role="admin")
+    except ValueError as exc:
+        return templates.TemplateResponse(request, "setup.html", {"error": str(exc)}, status_code=422)
+    if not user.username or not user.display_name:
+        raise HTTPException(422, "이름과 아이디를 입력하세요.")
+    db.add(user)
+    db.commit()
+    request.session["user_id"] = user.id
+    return RedirectResponse("/", status_code=303)
+
+
+@app.get("/mypage", response_class=HTMLResponse)
+def mypage(request: Request):
+    pending_secret = request.session.get("pending_totp_secret")
+    return templates.TemplateResponse(request, "mypage.html", {
+        "pending_secret": pending_secret,
+        "totp_uri": totp_uri(pending_secret, request.state.user.username) if pending_secret else None,
+        "notice": request.query_params.get("notice"), "error": request.query_params.get("error"),
+    })
+
+
+@app.post("/mypage/password")
+def change_password(request: Request, current_password: str = Form(...),
+                    new_password: str = Form(...), db: Session = Depends(get_db)):
+    user = db.get(User, request.state.user.id)
+    if not verify_user_password(current_password, user.password_hash):
+        return RedirectResponse("/mypage?error=" + quote("현재 비밀번호가 일치하지 않습니다."), 303)
+    try:
+        user.password_hash = hash_user_password(new_password)
+    except ValueError as exc:
+        return RedirectResponse("/mypage?error=" + quote(str(exc)), 303)
+    db.commit()
+    return RedirectResponse("/mypage?notice=" + quote("비밀번호를 변경했습니다."), 303)
+
+
+@app.post("/mypage/totp/start")
+def start_totp(request: Request):
+    request.session["pending_totp_secret"] = new_totp_secret()
+    return RedirectResponse("/mypage", 303)
+
+
+@app.post("/mypage/totp/confirm")
+def confirm_totp(request: Request, code: str = Form(...), db: Session = Depends(get_db)):
+    secret = request.session.get("pending_totp_secret")
+    if not secret or not verify_totp(secret, code.strip()):
+        return RedirectResponse("/mypage?error=" + quote("인증 코드가 올바르지 않습니다."), 303)
+    user = db.get(User, request.state.user.id)
+    user.totp_secret = secret
+    db.commit()
+    request.session.pop("pending_totp_secret", None)
+    return RedirectResponse("/mypage?notice=" + quote("TOTP 인증을 활성화했습니다."), 303)
+
+
+@app.post("/mypage/totp/disable")
+def disable_totp(request: Request, password: str = Form(...), db: Session = Depends(get_db)):
+    user = db.get(User, request.state.user.id)
+    if not verify_user_password(password, user.password_hash):
+        return RedirectResponse("/mypage?error=" + quote("비밀번호가 일치하지 않습니다."), 303)
+    user.totp_secret = None
+    db.commit()
+    return RedirectResponse("/mypage?notice=" + quote("TOTP 인증을 해제했습니다."), 303)
+
+
+@app.get("/users", response_class=HTMLResponse)
+def users_page(request: Request, db: Session = Depends(get_db)):
+    return templates.TemplateResponse(request, "users.html", {
+        "users": db.scalars(select(User).order_by(User.username)).all(),
+        "notice": request.query_params.get("notice"),
+    })
+
+
+@app.post("/users")
+def add_user(username: str = Form(...), display_name: str = Form(...), password: str = Form(...),
+             role: str = Form(...), db: Session = Depends(get_db)):
+    if role not in ROLE_LEVEL or not username.strip() or db.scalar(select(User).where(User.username == username.strip())):
+        raise HTTPException(422, "계정 정보 또는 등급을 확인하세요.")
+    db.add(User(username=username.strip(), display_name=display_name.strip(),
+                password_hash=hash_user_password(password), role=role))
+    db.commit()
+    return RedirectResponse("/users?notice=" + quote("계정을 추가했습니다."), 303)
+
+
+@app.post("/users/{user_id}")
+def update_user(user_id: int, request: Request, display_name: str = Form(...), role: str = Form(...),
+                enabled: bool = Form(False), password: str = Form(""), db: Session = Depends(get_db)):
+    user = db.get(User, user_id)
+    if not user or role not in ROLE_LEVEL:
+        raise HTTPException(404)
+    if user.id == request.state.user.id and (role != "admin" or not enabled):
+        raise HTTPException(422, "자신의 관리자 권한이나 사용 상태는 해제할 수 없습니다.")
+    user.display_name, user.role, user.enabled = display_name.strip(), role, enabled
+    if password:
+        user.password_hash = hash_user_password(password)
+    db.commit()
+    return RedirectResponse("/users?notice=" + quote("계정을 변경했습니다."), 303)
+
+
+@app.post("/users/{user_id}/delete")
+def delete_user(user_id: int, request: Request, db: Session = Depends(get_db)):
+    user = db.get(User, user_id)
+    if not user:
+        raise HTTPException(404)
+    if user.id == request.state.user.id:
+        raise HTTPException(422, "현재 로그인한 계정은 삭제할 수 없습니다.")
+    db.delete(user)
+    db.commit()
+    return RedirectResponse("/users?notice=" + quote("계정을 삭제했습니다."), 303)
 
 
 @app.get("/health")

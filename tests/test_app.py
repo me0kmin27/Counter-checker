@@ -12,6 +12,7 @@ from sqlalchemy.schema import CreateTable
 from app.database import SessionLocal
 from app.models import (
     Attachment, CounterReading, Device, EmailMessage, ExtractionRun, Organization, PopAccount, Site,
+    User,
 )
 from app.pop_service import (
     MAX_POP_LINE_BYTES,
@@ -22,6 +23,33 @@ from app.pop_service import (
     store_message,
 )
 from app.security import decrypt_password, encrypt_password
+
+
+def test_login_roles_and_account_management(client):
+    client.post("/users", data={
+        "username": "reader", "display_name": "조회 담당", "password": "reader-password",
+        "role": "viewer",
+    })
+    client.post("/logout")
+    assert client.get("/").status_code == 200  # follows the login redirect
+    response = client.post("/login", data={
+        "username": "reader", "password": "reader-password", "next": "/",
+    }, follow_redirects=False)
+    assert response.status_code == 303
+    assert "POP 설정" not in client.get("/").text
+    assert client.get("/settings", follow_redirects=False).status_code == 403
+
+
+def test_mypage_password_and_totp_enrollment(client):
+    assert client.post("/mypage/password", data={
+        "current_password": "test-password-123", "new_password": "new-password-123",
+    }, follow_redirects=False).status_code == 303
+    response = client.post("/mypage/totp/start", follow_redirects=False)
+    assert response.status_code == 303
+    page = client.get("/mypage")
+    assert "otpauth://totp/" in page.text
+    with SessionLocal() as db:
+        assert db.query(User).filter_by(username="admin").one().totp_secret is None
 
 
 def test_health_and_empty_pages(client):
