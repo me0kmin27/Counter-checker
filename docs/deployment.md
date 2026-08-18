@@ -8,6 +8,12 @@
 
 ## GitHub 기반 흐름
 
+현재 저장소의 `deploy-on-pr-merge.yml`은 `main` 대상 PR이 병합되면 운영 서버에 코드를
+동기화한 뒤 Docker Compose 이미지를 다시 빌드하고 서비스를 재시작합니다. 서버의 `.env`는
+동기화와 삭제 대상에서 제외해 운영 secret을 보존하며, 배포 마지막에는 web 컨테이너 내부에서
+`/health`를 호출해 새 버전이 정상적으로 응답하는지 확인합니다. 운영 서버에는 Docker Compose와
+배포 경로의 `.env`가 미리 준비되어 있어야 합니다.
+
 ```mermaid
 flowchart LR
     PR[Pull Request] --> CI[lint/test/security/build]
