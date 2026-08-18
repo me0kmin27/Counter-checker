@@ -10,13 +10,14 @@ from _environment import ROOT, load_env
 load_env(ROOT / ".env")
 sys.path.insert(0, str(ROOT))
 
-from app.database import Base, SessionLocal, engine  # noqa: E402
+from app.database import Base, SessionLocal, engine, ensure_compatibility_schema  # noqa: E402
 from app.models import PopAccount  # noqa: E402
 from app.pop_service import fetch_account  # noqa: E402
 
 
 def main() -> int:
     Base.metadata.create_all(engine)
+    ensure_compatibility_schema()
     failed = False
     with SessionLocal() as db:
         accounts = db.scalars(select(PopAccount).where(PopAccount.enabled.is_(True))).all()

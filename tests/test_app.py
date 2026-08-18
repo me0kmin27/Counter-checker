@@ -1,10 +1,20 @@
+import errno
 from email.message import EmailMessage as MimeMessage
 import socket
-from unittest.mock import patch
+from unittest.mock import MagicMock, call, patch
+
+from sqlalchemy.dialects import mysql
+from sqlalchemy.exc import DataError
+from sqlalchemy.schema import CreateTable
 
 from app.database import SessionLocal
-from app.models import CounterReading, Device, EmailMessage, ExtractionRun, Organization, PopAccount, Site
-from app.pop_service import describe_connection_error, store_message
+from app.models import (
+    Attachment, CounterReading, Device, EmailMessage, ExtractionRun, Organization, PopAccount, Site,
+)
+from app.pop_service import (
+    MailConfigurationError, _create_pop_socket, check_smtp_account, describe_connection_error,
+    fetch_account, store_message,
+)
 from app.security import decrypt_password, encrypt_password
 
 
@@ -12,6 +22,8 @@ def test_health_and_empty_pages(client):
     assert client.get("/health").json() == {"status": "ok"}
     assert "아직 받은 메일이 없습니다" in client.get("/").text
     assert "POP 계정 설정" in client.get("/settings").text
+    assert "사용자 아이디" in client.get("/settings").text
+    assert "SMTP 서버에 인증 필요" in client.get("/settings").text
 
 
 def test_add_pop_account_encrypts_password(client):
@@ -25,6 +37,93 @@ def test_add_pop_account_encrypts_password(client):
         account = db.query(PopAccount).one()
         assert account.encrypted_password != b"secret"
         assert decrypt_password(account.encrypted_password) == "secret"
+
+
+def test_add_account_saves_outlook_style_pop_and_smtp_options(client):
+    response = client.post("/settings", data={
+        "name": "Outlook", "host": "pop.example.com", "port": "995",
+        "username": "pop-user", "password": "pop-secret", "use_ssl": "on",
+        "pop_require_spa": "on", "smtp_host": "smtp.example.com", "smtp_port": "465",
+        "smtp_security_mode": "ssl", "smtp_timeout": "45", "smtp_require_spa": "on",
+        "smtp_auth_required": "on", "smtp_auth_method": "credentials",
+        "smtp_username": "smtp-user", "smtp_password": "smtp-secret",
+    }, follow_redirects=False)
+
+    assert response.status_code == 303
+    with SessionLocal() as db:
+        account = db.query(PopAccount).one()
+        assert (account.use_ssl, account.pop_require_spa) == (True, True)
+        assert (account.smtp_host, account.smtp_port) == ("smtp.example.com", 465)
+        assert (account.smtp_security_mode, account.smtp_timeout) == ("ssl", 45)
+        assert account.smtp_require_spa and account.smtp_auth_required
+        assert (account.smtp_auth_method, account.smtp_username) == ("credentials", "smtp-user")
+        assert decrypt_password(account.encrypted_smtp_password) == "smtp-secret"
+
+
+def test_smtp_encryption_modes_connect_as_configured():
+    account = PopAccount(
+        name="SMTP", host="pop.example.com", port=995, username="user",
+        encrypted_password=encrypt_password("secret"), smtp_host="smtp.example.com",
+        smtp_port=25, smtp_timeout=17, smtp_auth_required=False,
+    )
+    for mode, port, uses_ssl, uses_starttls in (
+        ("none", 25, False, False),
+        ("starttls", 587, False, True),
+        ("ssl", 465, True, False),
+        ("auto", 587, False, True),
+    ):
+        account.smtp_security_mode, account.smtp_port = mode, port
+        smtp_client = MagicMock()
+        with patch("app.pop_service.smtplib.SMTP", return_value=smtp_client) as plain, \
+             patch("app.pop_service.smtplib.SMTP_SSL", return_value=smtp_client) as implicit:
+            check_smtp_account(account)
+
+        assert implicit.called is uses_ssl
+        assert plain.called is (not uses_ssl)
+        assert smtp_client.starttls.called is uses_starttls
+
+
+def test_smtp_authentication_can_reuse_pop_or_dedicated_credentials():
+    account = PopAccount(
+        name="SMTP", host="pop.example.com", port=995, username="pop-user",
+        encrypted_password=encrypt_password("pop-secret"), smtp_host="smtp.example.com",
+        smtp_port=25, smtp_timeout=30, smtp_security_mode="none", smtp_auth_required=True,
+        smtp_auth_method="same_as_pop",
+    )
+    smtp_client = MagicMock()
+    with patch("app.pop_service.smtplib.SMTP", return_value=smtp_client):
+        check_smtp_account(account)
+    smtp_client.login.assert_called_once_with("pop-user", "pop-secret")
+
+    smtp_client.reset_mock()
+    account.smtp_auth_method = "credentials"
+    account.smtp_username = "smtp-user"
+    account.encrypted_smtp_password = encrypt_password("smtp-secret")
+    with patch("app.pop_service.smtplib.SMTP", return_value=smtp_client):
+        check_smtp_account(account)
+    smtp_client.login.assert_called_once_with("smtp-user", "smtp-secret")
+
+    smtp_client.reset_mock()
+    account.smtp_auth_method = "pop_before_smtp"
+    with patch("app.pop_service.smtplib.SMTP", return_value=smtp_client):
+        check_smtp_account(account)
+    smtp_client.login.assert_not_called()
+
+
+def test_smtp_spa_selection_fails_clearly_instead_of_sending_basic_credentials():
+    account = PopAccount(
+        name="SPA", host="pop.example.com", port=995, username="user",
+        encrypted_password=encrypt_password("secret"), smtp_host="smtp.example.com",
+        smtp_port=587, smtp_timeout=30, smtp_security_mode="starttls",
+        smtp_require_spa=True,
+    )
+
+    try:
+        check_smtp_account(account)
+    except MailConfigurationError as exc:
+        assert "SPA 인증은 현재 지원하지 않습니다" in str(exc)
+    else:
+        raise AssertionError("SPA must not silently fall back to basic authentication")
 
 
 def test_store_and_view_mime_message(client):
@@ -86,7 +185,9 @@ def test_update_pop_account_keeps_password_when_blank(client):
     assert response.status_code == 303
     with SessionLocal() as db:
         account = db.get(PopAccount, account_id)
-        assert (account.name, account.host, account.use_ssl) == ("after", "pop2.example.com", False)
+        assert (account.name, account.host, account.security_mode) == (
+            "after", "pop2.example.com", "starttls"
+        )
         assert decrypt_password(account.encrypted_password) == "secret"
 
 
@@ -98,13 +199,55 @@ def test_fetch_failure_displays_actionable_pop_error(client):
     with SessionLocal() as db:
         account_id = db.query(PopAccount).one().id
 
-    with patch("app.pop_service.poplib.POP3_SSL", side_effect=socket.gaierror("not found")):
+    with patch("app.pop_service._IPv4PreferredPOP3SSL", side_effect=socket.gaierror("not found")):
         response = client.post(f"/settings/{account_id}/fetch", follow_redirects=False)
 
     assert response.status_code == 303
     assert "error=" in response.headers["location"]
     error_page = client.get(response.headers["location"])
     assert "POP 서버 주소를 찾을 수 없습니다" in error_page.text
+
+
+def test_fetch_uses_saved_smtp_credentials_for_pop_user_pass(client):
+    with SessionLocal() as db:
+        account = PopAccount(
+            name="SMTP credentials", host="pop.example.com", port=995,
+            username="smtp-user@example.com", encrypted_password=encrypt_password("smtp-secret"),
+            use_ssl=True, security_mode="ssl",
+        )
+        db.add(account)
+        db.commit()
+        pop_client = MagicMock()
+        pop_client.stat.return_value = (0, 0)
+
+        with patch("app.pop_service._IPv4PreferredPOP3SSL", return_value=pop_client):
+            assert fetch_account(db, account) == 0
+
+    pop_client.user.assert_called_once_with("smtp-user@example.com")
+    pop_client.pass_.assert_called_once_with("smtp-secret")
+
+
+def test_starttls_is_negotiated_before_pop_authentication(client):
+    with SessionLocal() as db:
+        account = PopAccount(
+            name="STARTTLS", host="pop.example.com", port=110,
+            username="smtp-user", encrypted_password=encrypt_password("smtp-secret"),
+            use_ssl=False, security_mode="starttls",
+        )
+        db.add(account)
+        db.commit()
+        pop_client = MagicMock()
+        pop_client.stat.return_value = (0, 0)
+        pop_client.attach_mock(pop_client.stls, "ordered_stls")
+        pop_client.attach_mock(pop_client.user, "ordered_user")
+
+        with patch("app.pop_service._IPv4PreferredPOP3", return_value=pop_client), \
+             patch("app.pop_service.ssl.create_default_context") as create_context:
+            assert fetch_account(db, account) == 0
+
+    create_context.assert_called_once_with()
+    assert pop_client.method_calls.index(call.ordered_stls(context=create_context.return_value)) \
+        < pop_client.method_calls.index(call.ordered_user("smtp-user"))
 
 
 def test_pop_protocol_error_bytes_are_readable():
@@ -114,6 +257,78 @@ def test_pop_protocol_error_bytes_are_readable():
     import poplib
     error = describe_connection_error(poplib.error_proto(b"-ERR invalid login"))
     assert error == "POP 서버 응답: -ERR invalid login"
+
+
+def test_network_unreachable_error_explains_container_and_ipv4_checks():
+    error = describe_connection_error(OSError(errno.ENETUNREACH, "Network is unreachable"))
+
+    assert "모두에 연결할 수 없습니다" in error
+    assert "IPv4" in error
+    assert "IPv6" in error
+    assert "Errno" not in error
+
+
+def test_timeout_error_does_not_assume_a_firewall_problem():
+    error = describe_connection_error(socket.timeout("timed out"))
+
+    assert "연결 또는 응답" in error
+    assert "POP 사용 허용 여부" in error
+    assert "방화벽" not in error
+
+
+def test_database_size_error_is_sanitized_and_actionable():
+    error = describe_connection_error(DataError(
+        "INSERT INTO email_messages ...", {}, Exception("Data too long for raw_message")
+    ))
+
+    assert "DB 스키마 업데이트" in error
+    assert "INSERT INTO" not in error
+
+
+def test_mysql_message_and_attachment_payloads_use_longblob():
+    message_ddl = str(CreateTable(EmailMessage.__table__).compile(dialect=mysql.dialect()))
+    attachment_ddl = str(CreateTable(Attachment.__table__).compile(dialect=mysql.dialect()))
+
+    assert "raw_message LONGBLOB" in message_ddl
+    assert "text_body LONGTEXT" in message_ddl
+    assert "html_body LONGTEXT" in message_ddl
+    assert "content LONGBLOB" in attachment_ddl
+
+
+def test_pop_socket_tries_ipv4_before_ipv6_and_falls_back():
+    ipv4 = (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("192.0.2.1", 995))
+    ipv6 = (socket.AF_INET6, socket.SOCK_STREAM, 6, "", ("2001:db8::1", 995, 0, 0))
+
+    with patch("app.pop_service.socket.getaddrinfo", side_effect=[[ipv4], [ipv6]]), \
+         patch("app.pop_service.socket.socket") as socket_factory:
+        ipv4_socket, ipv6_socket = socket_factory.side_effect = [
+            MagicMock(), MagicMock(),
+        ]
+        ipv4_socket.connect.side_effect = OSError(errno.ENETUNREACH, "unreachable")
+
+        result = _create_pop_socket("pop.example.com", 995, 30)
+
+    assert result is ipv6_socket
+    ipv4_socket.connect.assert_called_once_with(ipv4[-1])
+    ipv6_socket.connect.assert_called_once_with(ipv6[-1])
+    assert ipv4_socket.settimeout.call_args_list == [call(5)]
+    assert ipv6_socket.settimeout.call_args_list == [call(5), call(30)]
+
+
+def test_pop_socket_does_not_wait_full_timeout_before_trying_next_address():
+    first = (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("192.0.2.1", 995))
+    second = (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("192.0.2.2", 995))
+
+    with patch("app.pop_service.socket.getaddrinfo", side_effect=[[first, second], []]), \
+         patch("app.pop_service.socket.socket") as socket_factory:
+        first_socket, second_socket = socket_factory.side_effect = [MagicMock(), MagicMock()]
+        first_socket.connect.side_effect = socket.timeout("timed out")
+
+        result = _create_pop_socket("pop.example.com", 995, 30)
+
+    assert result is second_socket
+    first_socket.settimeout.assert_called_once_with(5)
+    assert second_socket.settimeout.call_args_list[-1].args == (30,)
 
 
 def test_mailbox_search_raw_download_and_delete(client):

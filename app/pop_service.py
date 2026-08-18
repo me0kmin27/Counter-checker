@@ -1,5 +1,7 @@
+import errno
 import hashlib
 import poplib
+import smtplib
 import socket
 import ssl
 from datetime import datetime, timezone
@@ -9,7 +11,7 @@ from email.parser import BytesParser
 from email.utils import getaddresses, parsedate_to_datetime
 
 from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DataError, IntegrityError
 from sqlalchemy.orm import Session
 
 from .models import Attachment, EmailMessage, PopAccount
@@ -17,16 +19,90 @@ from .security import decrypt_password
 
 
 MAX_MESSAGE_BYTES = 25 * 1024 * 1024
+CONNECT_ATTEMPT_TIMEOUT_SECONDS = 5
+
+
+class MailConfigurationError(Exception):
+    """A selected mail option cannot be completed safely."""
+
+
+def _create_pop_socket(host: str, port: int, timeout: float | None) -> socket.socket:
+    """Connect over IPv4 first and fall back to IPv6 when IPv4 is unavailable."""
+    if timeout is not None and timeout <= 0:
+        raise ValueError("Non-blocking sockets are not supported")
+
+    addresses = []
+    resolution_errors = []
+    for family in (socket.AF_INET, socket.AF_INET6):
+        try:
+            addresses.extend(socket.getaddrinfo(host, port, family, socket.SOCK_STREAM))
+        except socket.gaierror as exc:
+            resolution_errors.append(exc)
+
+    if not addresses:
+        if resolution_errors:
+            raise resolution_errors[-1]
+        raise socket.gaierror(f"No address found for {host}")
+
+    connection_errors = []
+    for family, socktype, proto, _, sockaddr in addresses:
+        sock = socket.socket(family, socktype, proto)
+        try:
+            # Do not spend the entire POP timeout on the first black-holed IP.
+            # A host often has several A/AAAA records, so leave time to try them.
+            attempt_timeout = (
+                min(timeout, CONNECT_ATTEMPT_TIMEOUT_SECONDS) if timeout is not None else None
+            )
+            sock.settimeout(attempt_timeout)
+            sock.connect(sockaddr)
+            sock.settimeout(timeout)
+            return sock
+        except OSError as exc:
+            connection_errors.append(exc)
+            sock.close()
+
+    # Prefer an IPv4 error over a misleading final IPv6 ENETUNREACH error.
+    raise connection_errors[0]
+
+
+class _IPv4PreferredPOP3(poplib.POP3):
+    def _create_socket(self, timeout):
+        return _create_pop_socket(self.host, self.port, timeout)
+
+
+class _IPv4PreferredPOP3SSL(poplib.POP3_SSL):
+    def _create_socket(self, timeout):
+        sock = _create_pop_socket(self.host, self.port, timeout)
+        return self.context.wrap_socket(sock, server_hostname=self.host)
 
 
 def describe_connection_error(exc: Exception) -> str:
     """Return a useful, password-safe error for the POP settings screen."""
-    if isinstance(exc, socket.gaierror):
+    if isinstance(exc, MailConfigurationError):
+        detail = str(exc)
+    elif isinstance(exc, DataError):
+        detail = (
+            "메일 데이터가 데이터베이스 컬럼의 저장 한도를 초과했습니다. "
+            "서비스를 최신 이미지로 다시 빌드하고 시작하여 DB 스키마 업데이트를 적용하세요."
+        )
+    elif isinstance(exc, smtplib.SMTPAuthenticationError):
+        detail = "SMTP 인증에 실패했습니다. 선택한 인증 방법과 사용자 이름, 암호를 확인하세요."
+    elif isinstance(exc, smtplib.SMTPException):
+        detail = "SMTP 서버 확인에 실패했습니다. 서버, 포트, 암호화 방법을 확인하세요."
+    elif isinstance(exc, socket.gaierror):
         detail = "POP 서버 주소를 찾을 수 없습니다. 서버 주소를 확인하세요."
     elif isinstance(exc, (TimeoutError, socket.timeout)):
-        detail = "POP 서버 연결 시간이 초과되었습니다. 주소, 포트, 방화벽을 확인하세요."
+        detail = (
+            "POP 서버의 연결 또는 응답을 기다리는 중 시간이 초과되었습니다. "
+            "POP 서버 주소와 포트, 메일 제공업체의 POP 사용 허용 여부를 확인하세요."
+        )
     elif isinstance(exc, ConnectionRefusedError):
         detail = "POP 서버가 연결을 거부했습니다. 주소와 포트를 확인하세요."
+    elif isinstance(exc, OSError) and exc.errno in (errno.ENETUNREACH, errno.EHOSTUNREACH):
+        detail = (
+            "POP 서버의 IPv4와 IPv6 주소 모두에 연결할 수 없습니다. "
+            "서버 주소와 포트가 올바른지, 실행 환경에 해당 IP 대역으로 가는 경로가 있는지 확인하세요."
+        )
     elif isinstance(exc, ssl.SSLCertVerificationError):
         detail = "POP 서버 TLS 인증서를 확인할 수 없습니다. 인증서와 서버 시간을 확인하세요."
     elif isinstance(exc, ssl.SSLError):
@@ -41,6 +117,49 @@ def describe_connection_error(exc: Exception) -> str:
     else:
         detail = f"POP 수신 중 오류가 발생했습니다: {exc}"
     return detail.replace("\r", " ").replace("\n", " ")[:500]
+
+
+def check_smtp_account(account: PopAccount) -> None:
+    """Connect, negotiate encryption, and authenticate using the saved SMTP options."""
+    if not account.smtp_host:
+        return
+    if account.smtp_require_spa:
+        raise MailConfigurationError(
+            "SMTP SPA 인증은 현재 지원하지 않습니다. SPA 옵션을 해제하고 일반 SMTP 인증을 사용하세요."
+        )
+
+    mode = account.smtp_security_mode or "auto"
+    if mode == "auto":
+        mode = "ssl" if account.smtp_port == 465 else (
+            "starttls" if account.smtp_port == 587 else "none"
+        )
+    client_type = smtplib.SMTP_SSL if mode == "ssl" else smtplib.SMTP
+    client = client_type(
+        account.smtp_host, account.smtp_port, timeout=account.smtp_timeout,
+        context=ssl.create_default_context() if mode == "ssl" else None,
+    ) if mode == "ssl" else client_type(
+        account.smtp_host, account.smtp_port, timeout=account.smtp_timeout,
+    )
+    try:
+        client.ehlo()
+        if mode == "starttls":
+            client.starttls(context=ssl.create_default_context())
+            client.ehlo()
+        if account.smtp_auth_required and account.smtp_auth_method != "pop_before_smtp":
+            if account.smtp_auth_method == "credentials":
+                if not account.smtp_username or not account.encrypted_smtp_password:
+                    raise MailConfigurationError("SMTP 사용자 이름과 암호를 입력하세요.")
+                username = account.smtp_username
+                password = decrypt_password(account.encrypted_smtp_password)
+            else:
+                username = account.username
+                password = decrypt_password(account.encrypted_password)
+            client.login(username, password)
+    finally:
+        try:
+            client.quit()
+        except (OSError, smtplib.SMTPException):
+            client.close()
 
 
 def _header(value: str | None) -> str:
@@ -104,11 +223,22 @@ def store_message(db: Session, account: PopAccount, raw: bytes) -> bool:
 
 
 def fetch_account(db: Session, account: PopAccount) -> int:
-    client_type = poplib.POP3_SSL if account.use_ssl else poplib.POP3
     client = None
     saved = 0
     try:
+        if account.pop_require_spa:
+            raise MailConfigurationError(
+                "POP SPA 인증은 현재 지원하지 않습니다. SPA 옵션을 해제하고 일반 로그온을 사용하세요."
+            )
+        security_mode = account.security_mode or ("ssl" if account.use_ssl else "starttls")
+        if security_mode == "auto":
+            security_mode = "ssl" if account.port == 995 else "starttls"
+        client_type = _IPv4PreferredPOP3SSL if security_mode == "ssl" else _IPv4PreferredPOP3
         client = client_type(account.host, account.port, timeout=30)
+        if security_mode == "starttls":
+            client.stls(context=ssl.create_default_context())
+        # Providers commonly call these the SMTP ID/password even when the same
+        # mailbox credentials are used for POP3 USER/PASS authentication.
         client.user(account.username)
         client.pass_(decrypt_password(account.encrypted_password))
         count, _ = client.stat()
@@ -122,6 +252,7 @@ def fetch_account(db: Session, account: PopAccount) -> int:
             if account.delete_after_receive:
                 client.dele(number)
         account.last_error = None
+        check_smtp_account(account)
         return saved
     except Exception as exc:
         db.rollback()
