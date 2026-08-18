@@ -36,3 +36,18 @@ def ensure_compatibility_schema():
                 "UPDATE pop_accounts SET security_mode = "
                 "CASE WHEN use_ssl THEN 'ssl' ELSE 'starttls' END"
             ))
+    additions = {
+        "pop_require_spa": "BOOLEAN NOT NULL DEFAULT 0",
+        "smtp_host": "VARCHAR(255)", "smtp_port": "INTEGER NOT NULL DEFAULT 587",
+        "smtp_security_mode": "VARCHAR(20) NOT NULL DEFAULT 'auto'",
+        "smtp_timeout": "INTEGER NOT NULL DEFAULT 30",
+        "smtp_require_spa": "BOOLEAN NOT NULL DEFAULT 0",
+        "smtp_auth_required": "BOOLEAN NOT NULL DEFAULT 0",
+        "smtp_auth_method": "VARCHAR(30) NOT NULL DEFAULT 'same_as_pop'",
+        "smtp_username": "VARCHAR(255)", "encrypted_smtp_password": "BLOB",
+    }
+    columns = {column["name"] for column in inspect(engine).get_columns("pop_accounts")}
+    with engine.begin() as connection:
+        for name, definition in additions.items():
+            if name not in columns:
+                connection.execute(text(f"ALTER TABLE pop_accounts ADD COLUMN {name} {definition}"))

@@ -13,14 +13,14 @@ def test_health_and_empty_pages(client):
     assert client.get("/health").json() == {"status": "ok"}
     assert "아직 받은 메일이 없습니다" in client.get("/").text
     assert "POP 계정 설정" in client.get("/settings").text
-    assert "SMTP 아이디" in client.get("/settings").text
-    assert "POP3의 USER/PASS 인증에 사용됩니다" in client.get("/settings").text
+    assert "사용자 아이디" in client.get("/settings").text
+    assert "SMTP 서버에 인증 필요" in client.get("/settings").text
 
 
 def test_add_pop_account_encrypts_password(client):
     response = client.post("/settings", data={
         "name": "업무 메일", "host": "pop.example.com", "port": "995",
-        "username": "counter@example.com", "password": "secret", "security_mode": "ssl",
+        "username": "counter@example.com", "password": "secret", "use_ssl": "on",
         "enabled": "on",
     }, follow_redirects=False)
     assert response.status_code == 303
@@ -28,6 +28,27 @@ def test_add_pop_account_encrypts_password(client):
         account = db.query(PopAccount).one()
         assert account.encrypted_password != b"secret"
         assert decrypt_password(account.encrypted_password) == "secret"
+
+
+def test_add_account_saves_outlook_style_pop_and_smtp_options(client):
+    response = client.post("/settings", data={
+        "name": "Outlook", "host": "pop.example.com", "port": "995",
+        "username": "pop-user", "password": "pop-secret", "use_ssl": "on",
+        "pop_require_spa": "on", "smtp_host": "smtp.example.com", "smtp_port": "465",
+        "smtp_security_mode": "ssl", "smtp_timeout": "45", "smtp_require_spa": "on",
+        "smtp_auth_required": "on", "smtp_auth_method": "credentials",
+        "smtp_username": "smtp-user", "smtp_password": "smtp-secret",
+    }, follow_redirects=False)
+
+    assert response.status_code == 303
+    with SessionLocal() as db:
+        account = db.query(PopAccount).one()
+        assert (account.use_ssl, account.pop_require_spa) == (True, True)
+        assert (account.smtp_host, account.smtp_port) == ("smtp.example.com", 465)
+        assert (account.smtp_security_mode, account.smtp_timeout) == ("ssl", 45)
+        assert account.smtp_require_spa and account.smtp_auth_required
+        assert (account.smtp_auth_method, account.smtp_username) == ("credentials", "smtp-user")
+        assert decrypt_password(account.encrypted_smtp_password) == "smtp-secret"
 
 
 def test_store_and_view_mime_message(client):
@@ -78,13 +99,13 @@ def test_prototype_domain_relations(client):
 def test_update_pop_account_keeps_password_when_blank(client):
     client.post("/settings", data={
         "name": "before", "host": "pop.example.com", "port": "995",
-        "username": "user", "password": "secret", "security_mode": "ssl", "enabled": "on",
+        "username": "user", "password": "secret", "use_ssl": "on", "enabled": "on",
     })
     with SessionLocal() as db:
         account_id = db.query(PopAccount).one().id
     response = client.post(f"/settings/{account_id}", data={
         "name": "after", "host": "pop2.example.com", "port": "110",
-        "username": "new-user", "password": "", "security_mode": "starttls", "enabled": "on",
+        "username": "new-user", "password": "", "enabled": "on",
     }, follow_redirects=False)
     assert response.status_code == 303
     with SessionLocal() as db:
@@ -98,7 +119,7 @@ def test_update_pop_account_keeps_password_when_blank(client):
 def test_fetch_failure_displays_actionable_pop_error(client):
     client.post("/settings", data={
         "name": "unreachable", "host": "bad.invalid", "port": "995",
-        "username": "user", "password": "secret", "security_mode": "ssl",
+        "username": "user", "password": "secret", "use_ssl": "on",
     })
     with SessionLocal() as db:
         account_id = db.query(PopAccount).one().id
