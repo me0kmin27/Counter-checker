@@ -23,6 +23,7 @@ from app.pop_service import (
     message_matches_filters,
     store_message,
 )
+from app.counter_ingestion import parse_counter_message
 from app.security import decrypt_password, encrypt_password
 
 
@@ -116,6 +117,59 @@ def test_store_and_view_mime_message(client):
     assert "8월 카운터" in detail.text
     assert "누적 카운터" in detail.text
     assert "counter.png" in detail.text
+
+
+@pytest.mark.parametrize(("subject", "body", "filename", "attachment", "adapter"), [
+    ("신도리코 카운터 통지", "시리얼번호: N12345\n흑백: 1,200\n컬러: 300\n총카운터: 1,500",
+     None, None, "sindoh-plain"),
+    ("KYOCERA Counter", "Serial Number: KYO-777\nB/W: 2,000\nColor: 400\nTotal: 2,400",
+     "counter.png", b"not-needed", "kyocera"),
+    ("Samsung report", "장비의 카운터 페이지를 첨부합니다.", "counter.rtf",
+     b"{\\rtf1 Serial No: SAM-99\\par Black: 3,000\\par Color: 500\\par Total: 3,500}",
+     "samsung-rtf"),
+])
+def test_vendor_counter_formats_are_parsed(subject, body, filename, attachment, adapter):
+    message = EmailMessage(subject=subject, text_body=body, html_body="", attachments=[])
+    if filename:
+        message.attachments.append(Attachment(
+            filename=filename, mime_type="application/rtf" if filename.endswith(".rtf") else "image/png",
+            size_bytes=len(attachment), content_sha256="0" * 64, content=attachment,
+        ))
+
+    parsed = parse_counter_message(message)
+
+    assert parsed.adapter == adapter
+    assert parsed.serial_number
+    expected = {
+        "sindoh-plain": {"black": 1200, "color": 300, "total": 1500},
+        "kyocera": {"black": 2000, "color": 400, "total": 2400},
+        "samsung-rtf": {"black": 3000, "color": 500, "total": 3500},
+    }
+    assert parsed.counters == expected[adapter]
+    assert set(parsed.counters) == {"black", "color", "total"}
+
+
+def test_received_counter_mail_automatically_creates_confirmed_readings(client):
+    with SessionLocal() as db:
+        organization = Organization(name="자동입력 고객사")
+        device = Device(site=Site(name="본점", organization=organization), brand="신도리코",
+                        serial_number="N-12345", normalized_serial="N12345")
+        account = PopAccount(name="counter", host="localhost", port=110, username="u",
+                             encrypted_password=encrypt_password("p"), use_ssl=False)
+        db.add_all([organization, account])
+        db.commit()
+        mime = MimeMessage()
+        mime["Subject"] = "신도리코 카운터 통지"
+        mime.set_content("시리얼번호: N-12345\n흑백: 12,000\n컬러: 2,000\n총카운터: 14,000")
+
+        assert store_message(db, account, mime.as_bytes())
+        readings = db.query(CounterReading).order_by(CounterReading.counter_type).all()
+
+        assert [(item.counter_type, item.value) for item in readings] == [
+            ("black", 12000), ("color", 2000), ("total", 14000),
+        ]
+        assert {item.status for item in readings} == {"confirmed"}
+        assert db.query(ExtractionRun).one().status == "done"
 
 
 def test_mail_filters_support_required_and_sufficient_conditions(client):
