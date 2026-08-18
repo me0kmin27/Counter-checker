@@ -1,16 +1,16 @@
 .PHONY: bootstrap dev test compose-up compose-down
 
 bootstrap:
-	./scripts/bootstrap.sh
+	python3 scripts/bootstrap.py
 
 dev:
-	./scripts/dev.sh
+	.venv/bin/python scripts/dev.py
 
 test:
 	.venv/bin/pytest
 
 compose-up:
-	./scripts/ensure-compose-env.sh
+	python3 scripts/ensure_compose_env.py
 	docker compose up --build
 
 compose-down:
