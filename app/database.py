@@ -25,6 +25,15 @@ def get_db():
 def ensure_compatibility_schema():
     """Add columns introduced after the initial create_all-only deployment."""
     table_names = inspect(engine).get_table_names()
+    if "bot_rules" in table_names:
+        bot_rule_columns = {
+            column["name"] for column in inspect(engine).get_columns("bot_rules")
+        }
+        if "serial_source_type" not in bot_rule_columns:
+            with engine.begin() as connection:
+                connection.execute(text(
+                    "ALTER TABLE bot_rules ADD COLUMN serial_source_type VARCHAR(20)"
+                ))
     if "organizations" in table_names:
         organization_columns = {
             column["name"] for column in inspect(engine).get_columns("organizations")

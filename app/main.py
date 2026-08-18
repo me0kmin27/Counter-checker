@@ -6,8 +6,8 @@ from datetime import datetime, time, timezone
 from contextlib import asynccontextmanager, suppress
 from urllib.parse import quote
 
-from fastapi import Depends, FastAPI, Form, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse, Response
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
@@ -20,7 +20,7 @@ from .models import (
     PopAccount, ProcessingEvent, Site, User,
 )
 from .pop_service import fetch_account
-from .counter_ingestion import process_counter_message
+from .counter_ingestion import attachment_to_text, process_counter_message
 from .security import (
     encrypt_password, hash_user_password, new_totp_secret, totp_uri, verify_totp,
     verify_user_password,
@@ -676,12 +676,14 @@ def bot_settings(request: Request, db: Session = Depends(get_db)):
 
 @app.post("/bot-settings")
 def add_bot_rule(brand: str = Form(...), source_type: str = Form(...),
+                 serial_source_type: str = Form("email"),
                  subject_keyword: str = Form(""), sender_keyword: str = Form(""),
                  sample_format: str = Form(""), serial_pattern: str = Form(...),
                  black_pattern: str = Form(""), color_pattern: str = Form(""),
                  total_pattern: str = Form(""), enabled: bool = Form(False),
                  db: Session = Depends(get_db)):
-    if source_type not in {"email", "html_attachment", "ocr", "rtf"} or not brand.strip() or not serial_pattern.strip():
+    source_types = {"email", "html_attachment", "ocr", "rtf"}
+    if source_type not in source_types or serial_source_type not in source_types or not brand.strip() or not serial_pattern.strip():
         raise HTTPException(422, "브랜드, 원본 유형, 시리얼 타겟을 확인하세요.")
     try:
         for pattern in (serial_pattern, black_pattern, color_pattern, total_pattern):
@@ -690,6 +692,7 @@ def add_bot_rule(brand: str = Form(...), source_type: str = Form(...),
     except (re.error, ValueError):
         raise HTTPException(422, "각 타겟 정규식에는 추출할 값을 감싸는 그룹 ( )이 필요합니다.")
     db.add(BotRule(brand=brand.strip(), source_type=source_type,
+                   serial_source_type=serial_source_type,
                    subject_keyword=subject_keyword.strip() or None,
                    sender_keyword=sender_keyword.strip() or None, sample_format=sample_format,
                    serial_pattern=serial_pattern.strip(), black_pattern=black_pattern.strip() or None,
@@ -697,6 +700,19 @@ def add_bot_rule(brand: str = Form(...), source_type: str = Form(...),
                    enabled=enabled))
     db.commit()
     return RedirectResponse("/bot-settings?notice=" + quote("봇 설정을 저장했습니다."), 303)
+
+
+@app.post("/bot-settings/preview")
+async def preview_bot_attachment(file: UploadFile = File(...)):
+    """Decode an operator's sample report without storing or executing the file."""
+    content = await file.read(2 * 1024 * 1024 + 1)
+    if len(content) > 2 * 1024 * 1024:
+        raise HTTPException(413, "샘플 파일은 2MB 이하여야 합니다.")
+    try:
+        source = attachment_to_text(file.filename or "", file.content_type or "", content)
+    except ValueError as error:
+        raise HTTPException(415, str(error)) from error
+    return JSONResponse({"filename": file.filename, "text": source})
 
 
 @app.post("/bot-settings/{rule_id}/delete")
