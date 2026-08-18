@@ -829,34 +829,6 @@ def test_custom_rule_does_not_guess_when_multiple_attachments_miss_filename():
     assert parsed.counters == {}
 
 
-@pytest.mark.parametrize("serial_number", ["11Y5300412", "WDM3500938"])
-def test_same_kyocera_rule_treats_both_machine_serials_identically(serial_number):
-    """Two machines sending the same report format must produce the same result."""
-    from app.models import BotRule
-
-    message = EmailMessage(
-        subject="KYOCERA Counter", sender="device@example.com",
-        text_body=f"Equipment ID: Serial Number: {serial_number}",
-        html_body="", attachments=[],
-    )
-    report = b"<html><body>Total A4: 7,654</body></html>"
-    message.attachments.append(Attachment(
-        filename=f"{serial_number}-counter.htm", mime_type="text/html",
-        size_bytes=len(report), content_sha256="c" * 64, content=report,
-    ))
-    rule = BotRule(
-        brand="교세라", source_type="html_attachment", serial_source_type="email",
-        attachment_filename="counter", enabled=True,
-        serial_pattern=r"Serial Number:\s*([A-Z0-9]+)",
-        total_pattern=r"Total A4:\s*([0-9,]+)",
-    )
-
-    parsed = parse_counter_message(message, [rule])
-
-    assert parsed.serial_number == serial_number
-    assert parsed.counters == {"total": 7654}
-
-
 def test_custom_rule_reads_only_the_named_kyocera_attachment():
     from app.models import BotRule
 

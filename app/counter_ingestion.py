@@ -5,7 +5,7 @@ import re
 import shutil
 import subprocess
 import tempfile
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -336,30 +336,6 @@ def process_counter_message(db: Session, message: EmailMessage) -> ExtractionRun
     )
     rules = db.scalars(select(BotRule).where(BotRule.enabled.is_(True)).order_by(BotRule.id)).all()
     parsed = parse_counter_message(message, rules)
-    # Last-resort identity recovery is based on the registered fleet, not on a
-    # vendor prefix.  This makes digit-leading (11Y...) and letter-leading
-    # (WDM...) serials equivalent even when a device changes the surrounding
-    # mail label or a legacy custom rule misses it.  Only an unambiguous serial
-    # present in the decoded message is accepted.
-    devices = db.scalars(select(Device)).all() if not parsed.serial_number else []
-    if devices:
-        identity_source = "\n".join([
-            message.subject or "", message.text_body or "", message.html_body or "",
-            _html_attachments(message),
-            *(
-                _rtf_to_text(item.content) for item in message.attachments
-                if item.filename.casefold().endswith(".rtf")
-                or item.mime_type.casefold().split(";", 1)[0] in {"application/rtf", "text/rtf"}
-            ),
-        ])
-        normalized_source = normalize_serial(identity_source)
-        matched_devices = [
-            item for item in devices
-            if len(normalize_serial(item.serial_number)) >= 4
-            and normalize_serial(item.serial_number) in normalized_source
-        ]
-        if len(matched_devices) == 1:
-            parsed = replace(parsed, serial_number=matched_devices[0].serial_number)
     # Ordinary inbox traffic must not pollute the extraction queue. A vendor
     # notification is actionable only when it contains at least one key field.
     if not parsed.serial_number and not parsed.counters:
@@ -372,7 +348,7 @@ def process_counter_message(db: Session, message: EmailMessage) -> ExtractionRun
     db.add(run)
     db.flush()
     serial_key = normalize_serial(parsed.serial_number or "")
-    devices = devices or (db.scalars(select(Device)).all() if serial_key else [])
+    devices = db.scalars(select(Device)).all() if serial_key else []
     device = next((item for item in devices if normalize_serial(item.serial_number) == serial_key), None)
     if not parsed.serial_number:
         run.status, run.error_code = "needs_review", "serial_missing"
