@@ -34,6 +34,16 @@ def ensure_compatibility_schema():
                 connection.execute(text(
                     "ALTER TABLE bot_rules ADD COLUMN serial_source_type VARCHAR(20)"
                 ))
+        additions = {
+            "attachment_filename": "VARCHAR(500)",
+            "serial_attachment_filename": "VARCHAR(500)",
+        }
+        with engine.begin() as connection:
+            for name, definition in additions.items():
+                if name not in bot_rule_columns:
+                    connection.execute(text(
+                        f"ALTER TABLE bot_rules ADD COLUMN {name} {definition}"
+                    ))
     if "organizations" in table_names:
         organization_columns = {
             column["name"] for column in inspect(engine).get_columns("organizations")

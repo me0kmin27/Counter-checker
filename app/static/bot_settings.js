@@ -21,14 +21,21 @@
       const result = await response.json();
       if (!response.ok) throw new Error(result.detail || '파일을 읽지 못했습니다.');
       counterSample.value = result.text;
-      document.querySelector('#source-type').value = file.name.toLowerCase().endsWith('.rtf') ? 'rtf' : 'html_attachment';
+      const attachmentType = file.name.toLowerCase().endsWith('.rtf') ? 'rtf' : 'html_attachment';
+      document.querySelector('#source-type').value = attachmentType;
+      document.querySelector('#attachment-filename').value = file.name;
       status.textContent = `${result.filename} 내용을 읽었습니다. 아래에서 실제 값을 선택하세요.`;
     } catch (error) { status.textContent = error.message; }
   });
 
   document.querySelectorAll('.target-button').forEach((button) => button.addEventListener('click', () => {
     const isSerial = button.dataset.target === 'serial_pattern';
-    const sample = isSerial ? serialSample : counterSample;
+    const serialSource = document.querySelector('#serial-source-type').value;
+    // Samsung and similar reports contain both counters and serial in the same
+    // attachment. In that case the loaded attachment textarea is the serial
+    // selection source too; the separate box is only for email text.
+    const serialUsesLoadedAttachment = isSerial && serialSource !== 'email';
+    const sample = isSerial && !serialUsesLoadedAttachment ? serialSample : counterSample;
     const start = sample.selectionStart, end = sample.selectionEnd;
     const selected = sample.value.slice(start, end).trim();
     if (!selected) {
