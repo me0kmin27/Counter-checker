@@ -10,6 +10,7 @@
 <a href="/customers" class="{% if request.url.path.startswith('/customers') %}active{% endif %}"><span class="nav-icon" aria-hidden="true">▤</span>거래처 관리</a>
 {% if request.state.user.role in ('operator', 'admin') %}
 <a href="/settings" class="{% if request.url.path == '/settings' %}active{% endif %}"><span class="nav-icon" aria-hidden="true">⚙</span>POP 설정</a>
+<a href="/bot-settings" class="{% if request.url.path.startswith('/bot-settings') %}active{% endif %}"><span class="nav-icon" aria-hidden="true">◎</span>봇 설정</a>
 {% endif %}
 <a href="/mypage" class="{% if request.url.path == '/mypage' %}active{% endif %}"><span class="nav-icon" aria-hidden="true">●</span>마이페이지</a>
 {% if request.state.user.role == 'admin' %}<a href="/users" class="{% if request.url.path.startswith('/users') %}active{% endif %}"><span class="nav-icon" aria-hidden="true">♙</span>계정 관리</a>{% endif %}

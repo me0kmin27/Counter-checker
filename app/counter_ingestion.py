@@ -12,7 +12,7 @@ from pathlib import Path
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
-from .models import CounterReading, Device, EmailMessage, ExtractionRun, ProcessingEvent
+from .models import BotRule, CounterReading, Device, EmailMessage, ExtractionRun, ProcessingEvent
 
 
 ADAPTER_VERSION = "2"
@@ -55,6 +55,35 @@ def _rtf_to_text(content: bytes) -> str:
     source = re.sub(r"\\(?:par|line|tab)\b\s?", "\n", source)
     source = re.sub(r"\\[a-zA-Z]+-?\d*\s?", "", source)
     return re.sub(r"[{}]", "", source)
+
+
+def _html_to_text(content: bytes) -> str:
+    """Decode an attached HTM report and expose its rendered text to parsers."""
+    charset_match = re.search(
+        br"charset\s*=\s*[\"']?([a-zA-Z0-9._-]+)", content[:4096], re.IGNORECASE,
+    )
+    candidates = [charset_match.group(1).decode("ascii", "ignore")] if charset_match else []
+    candidates.extend(["utf-8", "cp949", "euc-kr", "latin-1"])
+    source = ""
+    for encoding in dict.fromkeys(candidates):
+        try:
+            source = content.decode(encoding)
+            break
+        except (LookupError, UnicodeDecodeError):
+            continue
+    source = re.sub(r"<(script|style)\b[^>]*>.*?</\1>", " ", source,
+                    flags=re.IGNORECASE | re.DOTALL)
+    source = re.sub(r"<(?:br|/p|/div|/tr|/li|/h[1-6])\b[^>]*>", "\n", source,
+                    flags=re.IGNORECASE)
+    return html.unescape(re.sub(r"<[^>]+>", " ", source))
+
+
+def _html_attachments(message: EmailMessage) -> str:
+    return "\n".join(
+        _html_to_text(item.content) for item in message.attachments
+        if item.mime_type.casefold() in {"text/html", "application/xhtml+xml"}
+        or item.filename.casefold().endswith((".htm", ".html"))
+    )
 
 
 def _ocr_images(message: EmailMessage) -> str:
@@ -161,7 +190,39 @@ def _extract(source: str, adapter: str, confidence: float) -> ParsedCounters:
     return ParsedCounters(adapter, serial, counters, evidence, confidence)
 
 
-def parse_counter_message(message: EmailMessage) -> ParsedCounters:
+def _custom_rule(message: EmailMessage, rules: list[BotRule]) -> ParsedCounters | None:
+    subject, sender = message.subject or "", message.sender or ""
+    for rule in rules:
+        if not rule.enabled or (rule.subject_keyword and rule.subject_keyword.casefold() not in subject.casefold()) or (rule.sender_keyword and rule.sender_keyword.casefold() not in sender.casefold()):
+            continue
+        if rule.source_type == "rtf":
+            source = "\n".join(_rtf_to_text(item.content) for item in message.attachments if item.filename.lower().endswith(".rtf") or item.mime_type in {"application/rtf", "text/rtf"})
+        elif rule.source_type == "html_attachment":
+            source = _html_attachments(message)
+        elif rule.source_type == "ocr":
+            source = _ocr_images(message)
+        else:
+            source = f"{subject}\n{message.text_body}\n{html.unescape(re.sub('<[^>]+>', ' ', message.html_body))}"
+        if not source:
+            continue
+        try:
+            serial_match = re.search(rule.serial_pattern, source, re.IGNORECASE | re.MULTILINE)
+            counters = {}
+            for counter_type, pattern in (("black", rule.black_pattern), ("color", rule.color_pattern), ("total", rule.total_pattern)):
+                match = re.search(pattern, source, re.IGNORECASE | re.MULTILINE) if pattern else None
+                if match:
+                    counters[counter_type] = _number(match.group(1))
+        except (re.error, IndexError, ValueError):
+            continue
+        if serial_match or counters:
+            return ParsedCounters(f"custom-{rule.brand}", serial_match.group(1).strip() if serial_match else None, counters, source[:4000], 0.95)
+    return None
+
+
+def parse_counter_message(message: EmailMessage, rules: list[BotRule] | None = None) -> ParsedCounters:
+    custom = _custom_rule(message, rules or [])
+    if custom:
+        return custom
     attachment_text = []
     has_rtf = False
     for item in message.attachments:
@@ -169,7 +230,7 @@ def parse_counter_message(message: EmailMessage) -> ParsedCounters:
             has_rtf = True
             attachment_text.append(_rtf_to_text(item.content))
 
-    subject_and_body = f"{message.subject}\n{message.text_body}\n{html.unescape(re.sub('<[^>]+>', ' ', message.html_body))}"
+    subject_and_body = f"{message.subject}\n{message.text_body}\n{html.unescape(re.sub('<[^>]+>', ' ', message.html_body))}\n{_html_attachments(message)}"
     probe = subject_and_body.casefold()
     if has_rtf or "samsung" in probe or "삼성" in probe:
         return _extract("\n".join([subject_and_body, *attachment_text]), "samsung-rtf", 0.98)
@@ -199,7 +260,8 @@ def process_counter_message(db: Session, message: EmailMessage) -> ExtractionRun
         select(EmailMessage).options(selectinload(EmailMessage.attachments))
         .where(EmailMessage.id == message.id)
     )
-    parsed = parse_counter_message(message)
+    rules = db.scalars(select(BotRule).where(BotRule.enabled.is_(True)).order_by(BotRule.id)).all()
+    parsed = parse_counter_message(message, rules)
     # Ordinary inbox traffic must not pollute the extraction queue. A vendor
     # notification is actionable only when it contains at least one key field.
     if not parsed.serial_number and not parsed.counters:

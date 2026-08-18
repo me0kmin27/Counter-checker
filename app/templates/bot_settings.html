@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}봇 설정 · Counter Checker{% endblock %}
+{% block heading %}봇 설정{% endblock %}
+{% block description %}브랜드별 메일·HTM 첨부·OCR·RTF 양식에서 카운터를 읽을 위치를 지정합니다.{% endblock %}
+{% block content %}
+{% if notice %}<div class="alert">{{ notice }}</div>{% endif %}
+<section class="panel"><div class="panel-title"><div><h2>추출 규칙 추가</h2><p>샘플 양식을 붙여 넣고, 각 값에 해당하는 정규식을 입력하세요. 추출할 값은 반드시 괄호로 묶습니다.</p></div></div>
+<form method="post" class="settings-form">
+<div class="form-grid"><label>브랜드<input name="brand" required placeholder="예: 교세라"></label><label>읽을 원본<select name="source_type"><option value="email">메일 제목·본문</option><option value="html_attachment">HTM/HTML 첨부 파일</option><option value="ocr">이미지 OCR 결과</option><option value="rtf">RTF 첨부 내용</option></select></label><label>제목 구분어 (선택)<input name="subject_keyword" placeholder="예: Counter Report"></label><label>보낸 사람 구분어 (선택)<input name="sender_keyword" placeholder="예: device@example.com"></label></div>
+<label>브랜드 양식 샘플<textarea name="sample_format" rows="7" placeholder="실제 메일 또는 HTM/OCR/RTF에서 보이는 텍스트 예시를 붙여 넣으세요."></textarea></label>
+<div class="form-grid"><label>시리얼 타겟 정규식<input name="serial_pattern" required placeholder="Serial No:\s*([A-Z0-9-]+)"></label><label>흑백 타겟 정규식<input name="black_pattern" placeholder="Black:\s*([0-9,]+)"></label><label>컬러 타겟 정규식<input name="color_pattern" placeholder="Color:\s*([0-9,]+)"></label><label>합계 타겟 정규식<input name="total_pattern" placeholder="Total:\s*([0-9,]+)"></label></div>
+<label class="check"><input type="checkbox" name="enabled" checked> 이 규칙 활성화</label><button class="button">규칙 저장</button></form></section>
+<section class="panel"><div class="panel-title"><div><h2>등록된 브랜드 규칙</h2><p>위에서부터 등록 순서대로 일치하는 첫 규칙을 사용합니다.</p></div></div>
+{% if rules %}<div class="table-wrap"><table><thead><tr><th>브랜드</th><th>원본</th><th>구분 조건</th><th>상태</th><th></th></tr></thead><tbody>{% for rule in rules %}<tr><td><b>{{ rule.brand }}</b></td><td>{{ {'email':'메일','html_attachment':'HTM 첨부','ocr':'OCR','rtf':'RTF'}[rule.source_type] }}</td><td>제목: {{ rule.subject_keyword or '전체' }}<br>발신자: {{ rule.sender_keyword or '전체' }}</td><td>{{ '활성' if rule.enabled else '비활성' }}</td><td><form method="post" action="/bot-settings/{{ rule.id }}/delete" onsubmit="return confirm('이 규칙을 삭제할까요?')"><button class="button danger">삭제</button></form></td></tr>{% endfor %}</tbody></table></div>{% else %}<div class="empty"><b>등록된 규칙이 없습니다.</b><span>브랜드 양식에 맞는 첫 규칙을 추가하세요.</span></div>{% endif %}</section>
+{% endblock %}

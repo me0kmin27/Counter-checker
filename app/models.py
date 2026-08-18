@@ -63,6 +63,23 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
 
 
+class BotRule(Base):
+    """Operator-defined extraction targets for a vendor mail format."""
+    __tablename__ = "bot_rules"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    brand: Mapped[str] = mapped_column(String(100))
+    source_type: Mapped[str] = mapped_column(String(20), default="email")
+    subject_keyword: Mapped[str | None] = mapped_column(String(300))
+    sender_keyword: Mapped[str | None] = mapped_column(String(300))
+    sample_format: Mapped[str] = mapped_column(Text, default="")
+    serial_pattern: Mapped[str] = mapped_column(String(1000))
+    black_pattern: Mapped[str | None] = mapped_column(String(1000))
+    color_pattern: Mapped[str | None] = mapped_column(String(1000))
+    total_pattern: Mapped[str | None] = mapped_column(String(1000))
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
 class EmailMessage(Base):
     __tablename__ = "email_messages"
     __table_args__ = (

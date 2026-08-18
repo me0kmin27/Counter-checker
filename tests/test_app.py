@@ -691,3 +691,42 @@ def test_mailbox_selected_bulk_delete_requires_a_selection(client):
                            follow_redirects=False)
     assert response.status_code == 303
     assert "%EC%82%AD%EC%A0%9C%ED%95%A0" in response.headers["location"]
+
+
+def test_kyocera_counter_is_parsed_from_htm_attachment():
+    message = EmailMessage(subject="KYOCERA Counter", sender="device@example.com",
+                           text_body="카운터 파일을 첨부합니다.", html_body="", attachments=[])
+    report = (b'<html><head><meta charset="utf-8"></head><body>'
+              b'<div>Serial Number: 11Y5300412</div>'
+              b'<div>MeterDate: 11 Aug 2026 09:50:56</div>'
+              b'<h2>Counters by Function:</h2><table><tr><td>Total:</td><td>4,135</td></tr>'
+              b'</table></body></html>')
+    message.attachments.append(Attachment(filename="counter.htm", mime_type="text/html",
+                                          size_bytes=len(report), content_sha256="1" * 64,
+                                          content=report))
+
+    parsed = parse_counter_message(message)
+
+    assert parsed.adapter == "kyocera"
+    assert parsed.serial_number == "11Y5300412"
+    assert parsed.counters == {"total": 4135}
+
+
+def test_custom_bot_rule_can_target_htm_attachment():
+    from app.models import BotRule
+
+    message = EmailMessage(subject="Custom report", sender="bot@example.com",
+                           text_body="첨부 참조", html_body="", attachments=[])
+    report = "<html><body>장비번호: K-100<br>흑백: 1,200<br>컬러: 30<br>합계: 1,230</body></html>".encode()
+    message.attachments.append(Attachment(filename="meter.HTML", mime_type="application/octet-stream",
+                                          size_bytes=len(report), content_sha256="2" * 64,
+                                          content=report))
+    rule = BotRule(brand="테스트", source_type="html_attachment", enabled=True,
+                   serial_pattern=r"장비번호:\s*([A-Z0-9-]+)",
+                   black_pattern=r"흑백:\s*([0-9,]+)", color_pattern=r"컬러:\s*([0-9,]+)",
+                   total_pattern=r"합계:\s*([0-9,]+)")
+
+    parsed = parse_counter_message(message, [rule])
+
+    assert parsed.serial_number == "K-100"
+    assert parsed.counters == {"black": 1200, "color": 30, "total": 1230}
