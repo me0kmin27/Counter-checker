@@ -32,19 +32,28 @@ make dev
 
 ## Docker Compose 실행
 
-```bash
-make compose-up
-```
-
-이 명령은 Python 환경 준비 스크립트로 `.env`와 암호화 키를 확인한 다음 FastAPI와 MariaDB를
-시작합니다. 운영 중 `APP_SECRET_KEY`를 변경하면 기존 POP 비밀번호를 복호화할 수 없으므로
-`.env`를 안전하게 백업해야 합니다.
-
-종료하려면 다음을 실행합니다.
+처음 설치하는 사용자는 아래 두 명령만 실행하면 됩니다.
 
 ```bash
-make compose-down
+make setup
+make start
 ```
+
+`make setup`은 `.env`를 만들고 암호화 키를 생성하며, `make start`는 FastAPI와 MariaDB를
+백그라운드로 시작합니다. 운영 중 `APP_SECRET_KEY`를 변경하면 기존 POP 비밀번호를 복호화할 수
+없으므로 `.env`를 안전하게 백업해야 합니다.
+
+자주 사용하는 운영 명령은 다음과 같습니다.
+
+```bash
+make status   # 컨테이너 실행 상태
+make logs     # 실시간 로그 (Ctrl+C로 보기만 종료)
+make restart  # 설정 변경 후 재시작
+make stop     # 서비스 종료; DB 데이터는 보존
+```
+
+세부 옵션(특정 서비스 로그, 로그 줄 수, 이미지 빌드 생략)은
+`python3 scripts/manage.py --help`와 [운영 스크립트 안내](docs/operations.md)에서 확인할 수 있습니다.
 
 ## 명령 체계
 
@@ -54,7 +63,9 @@ make compose-down
 | 개발 서버 실행 | `.venv/bin/python scripts/dev.py` 또는 `make dev` |
 | 전체 테스트 | `.venv/bin/pytest` 또는 `make test` |
 | 활성 POP 계정 즉시 수신 | `.venv/bin/python scripts/fetch_mail.py` |
-| Compose 환경 파일 확인 | `python3 scripts/ensure_compose_env.py` |
+| Compose 최초 설정 | `python3 scripts/manage.py setup` 또는 `make setup` |
+| Compose 시작/종료 | `make start` / `make stop` |
+| Compose 상태/로그 | `make status` / `make logs` |
 
 배포 환경에서는 `DATABASE_URL`, `APP_SECRET_KEY`, `POLL_INTERVAL_SECONDS`를 환경 변수로
 전달합니다. 활성 POP 계정은 FastAPI 프로세스 내부 polling task가 기본 5분 간격으로 확인하므로
