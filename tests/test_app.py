@@ -367,3 +367,41 @@ def test_mailbox_search_raw_download_and_delete(client):
     assert "filename*=UTF-8''" in attachment_response.headers["content-disposition"]
     assert client.post(f"/mail/{message_id}/delete", follow_redirects=False).status_code == 303
     assert client.get(f"/mail/{message_id}").status_code == 404
+
+
+def test_mailbox_selected_and_all_bulk_delete(client):
+    with SessionLocal() as db:
+        account = PopAccount(name="test", host="localhost", port=110, username="u",
+                             encrypted_password=encrypt_password("p"), use_ssl=False)
+        db.add(account)
+        db.commit()
+        message_ids = []
+        for subject in ("첫 번째", "두 번째", "세 번째"):
+            mime = MimeMessage()
+            mime["Subject"] = subject
+            mime.set_content(subject)
+            assert store_message(db, account, mime.as_bytes())
+            message_ids.append(db.query(EmailMessage).filter_by(subject=subject).one().id)
+
+    page = client.get("/mail")
+    assert 'id="select-all"' in page.text
+    assert page.text.count('name="message_ids"') == 3
+    response = client.post("/mail/bulk-delete", data={
+        "scope": "selected", "message_ids": [message_ids[0], message_ids[2]],
+    }, follow_redirects=False)
+    assert response.status_code == 303
+    with SessionLocal() as db:
+        assert [message.id for message in db.query(EmailMessage).all()] == [message_ids[1]]
+
+    response = client.post("/mail/bulk-delete", data={"scope": "all"},
+                           follow_redirects=False)
+    assert response.status_code == 303
+    with SessionLocal() as db:
+        assert db.query(EmailMessage).count() == 0
+
+
+def test_mailbox_selected_bulk_delete_requires_a_selection(client):
+    response = client.post("/mail/bulk-delete", data={"scope": "selected"},
+                           follow_redirects=False)
+    assert response.status_code == 303
+    assert "%EC%82%AD%EC%A0%9C%ED%95%A0" in response.headers["location"]
