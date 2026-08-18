@@ -6,7 +6,7 @@ import shutil
 import subprocess
 import tempfile
 from dataclasses import dataclass
-from datetime import timezone
+from datetime import datetime, timezone
 from pathlib import Path
 
 from sqlalchemy import select
@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session, selectinload
 from .models import CounterReading, Device, EmailMessage, ExtractionRun, ProcessingEvent
 
 
-ADAPTER_VERSION = "1"
+ADAPTER_VERSION = "2"
 COUNTER_LABELS = {
     "black": ("흑백", r"black(?:\s*&\s*white)?", "b/?w", "mono(?:chrome)?"),
     "color": ("컬러", "칼라", "colou?r"),
@@ -31,6 +31,7 @@ class ParsedCounters:
     counters: dict[str, int]
     evidence: str
     confidence: float
+    captured_at: datetime | None = None
 
 
 def normalize_serial(value: str) -> str:
@@ -77,7 +78,62 @@ def _ocr_images(message: EmailMessage) -> str:
     return "\n".join(output)
 
 
+def _number(value: str) -> int:
+    return int(re.sub(r"\D", "", value))
+
+
+def _captured_at(value: str, formats: tuple[str, ...]) -> datetime | None:
+    value = re.sub(r"\s+", " ", value.strip())
+    for date_format in formats:
+        try:
+            return datetime.strptime(value, date_format).replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+    return None
+
+
+def _sindoh(source: str) -> ParsedCounters:
+    """Parse Sindoh's bracket-labelled, comma-delimited plain-text report."""
+    values = {
+        label.casefold(): value.strip()
+        for label, value in re.findall(
+            r"\[([^\]]+)]\s*,?\s*(.*?)(?=\s*\[[^\]]+]|$)", source, re.DOTALL,
+        )
+    }
+    counters = {}
+    for label, counter_type in (
+        ("total counter", "total"),
+        ("total color counter", "color"),
+        ("total black counter", "black"),
+    ):
+        if values.get(label) and re.search(r"\d", values[label]):
+            counters[counter_type] = _number(values[label])
+    captured = _captured_at(values.get("send date", ""), ("%d/%m/%y", "%y/%m/%d"))
+    return ParsedCounters(
+        "sindoh-plain", values.get("serial number"), counters, source[:4000], 0.99, captured,
+    )
+
+
+def _kyocera(source: str) -> ParsedCounters:
+    """Parse Kyocera's aligned header and Counters by Function section."""
+    serial = re.search(
+        r"Serial\s+Number\s*:\s*([A-Z0-9._/-]+)", source, re.IGNORECASE,
+    )
+    meter_date = re.search(
+        r"MeterDate\s*:\s*(?:[A-Za-z]{3}\s+)?(\d{1,2}\s+[A-Za-z]{3}\s+\d{4}\s+\d{2}:\d{2}:\d{2})",
+        source, re.IGNORECASE,
+    )
+    function_section = re.split(r"Counters\s+by\s+Function\s*:", source, flags=re.IGNORECASE)
+    total = re.findall(r"\bTotal\s*:\s*([\d,]+)", function_section[-1], re.IGNORECASE)
+    counters = {"total": _number(total[-1])} if total else {}
+    captured = _captured_at(meter_date.group(1), ("%d %b %Y %H:%M:%S",)) if meter_date else None
+    return ParsedCounters(
+        "kyocera", serial.group(1) if serial else None, counters, source[:4000], 0.99, captured,
+    )
+
+
 def _extract(source: str, adapter: str, confidence: float) -> ParsedCounters:
+    source = source.replace(r"\:", ":").replace(r"\@", "@")
     serial = None
     serial_pattern = "|".join(SERIAL_LABELS)
     match = re.search(
@@ -117,11 +173,23 @@ def parse_counter_message(message: EmailMessage) -> ParsedCounters:
     probe = subject_and_body.casefold()
     if has_rtf or "samsung" in probe or "삼성" in probe:
         return _extract("\n".join([subject_and_body, *attachment_text]), "samsung-rtf", 0.98)
-    if "kyocera" in probe or "교세라" in probe:
-        parsed = _extract(subject_and_body, "kyocera", 0.98)
-        if parsed.serial_number and len(parsed.counters) >= 2:
+    if "meterdate" in probe or "counters by function" in probe or "kyocera" in probe or "교세라" in probe:
+        parsed = _kyocera(subject_and_body)
+        if {"black", "color", "total"} <= parsed.counters.keys():
             return parsed
-        return _extract(f"{subject_and_body}\n{_ocr_images(message)}", "kyocera-ocr", 0.80)
+        ocr_text = _ocr_images(message)
+        if not ocr_text:
+            return parsed
+        ocr = _extract(ocr_text, "kyocera-ocr", 0.80)
+        # Header values are higher-confidence than OCR and therefore win on
+        # conflicts; OCR only fills fields absent from the mail body.
+        counters = {**ocr.counters, **parsed.counters}
+        return ParsedCounters(
+            "kyocera-ocr", parsed.serial_number or ocr.serial_number, counters,
+            f"{parsed.evidence}\n{ocr.evidence}"[:4000], 0.80, parsed.captured_at,
+        )
+    if "[serial number]" in probe or "[total counter]" in probe:
+        return _sindoh(subject_and_body)
     return _extract(subject_and_body, "sindoh-plain", 0.99)
 
 
@@ -153,9 +221,10 @@ def process_counter_message(db: Session, message: EmailMessage) -> ExtractionRun
     elif not parsed.counters:
         run.status, run.error_code = "needs_review", "counters_missing"
     else:
-        captured_at = message.sent_at or message.received_at
+        captured_at = parsed.captured_at or message.sent_at or message.received_at
         captured_at = captured_at if captured_at.tzinfo else captured_at.replace(tzinfo=timezone.utc)
         needs_review = not {"black", "color", "total"} <= parsed.counters.keys()
+        decreased = False
         for counter_type, value in parsed.counters.items():
             previous = db.scalar(
                 select(CounterReading).where(
@@ -165,17 +234,21 @@ def process_counter_message(db: Session, message: EmailMessage) -> ExtractionRun
                 ).order_by(CounterReading.captured_at.desc()).limit(1)
             )
             anomalous = previous is not None and value < previous.value
+            decreased = decreased or anomalous
             needs_review = needs_review or anomalous
             db.add(CounterReading(
                 run=run, device=device, counter_type=counter_type, value=value,
                 captured_at=captured_at, confidence=parsed.confidence,
-                status="needs_review" if anomalous or parsed.confidence < .9 else "confirmed",
+                status="needs_review" if needs_review or parsed.confidence < .9 else "confirmed",
                 raw_text=parsed.evidence,
             ))
+        if needs_review:
+            for reading in run.readings:
+                reading.status = "needs_review"
         run.status = "needs_review" if needs_review else "done"
-        run.error_code = "counter_decreased" if needs_review and any(
-            reading.status == "needs_review" for reading in run.readings
-        ) else ("counter_type_missing" if needs_review else None)
+        run.error_code = "counter_decreased" if decreased else (
+            "counter_type_missing" if needs_review else None
+        )
     db.add(ProcessingEvent(
         email_id=message.id, from_status=None, to_status=run.status,
         event_metadata={"adapter": parsed.adapter, "error_code": run.error_code},

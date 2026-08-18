@@ -120,9 +120,15 @@ def test_store_and_view_mime_message(client):
 
 
 @pytest.mark.parametrize(("subject", "body", "filename", "attachment", "adapter"), [
-    ("신도리코 카운터 통지", "시리얼번호: N12345\n흑백: 1,200\n컬러: 300\n총카운터: 1,500",
+    ("신도리코 카운터 통지",
+     "[Model Name], [Serial Number], 809160416897 [Send Date],16/07/26 "
+     "[Total Counter],00002870 [Total Color Counter],00002153 "
+     "[Total Black Counter],00000717 [Total Scan/Fax Counter],00000179",
      None, None, "sindoh-plain"),
-    ("KYOCERA Counter", "Serial Number: KYO-777\nB/W: 2,000\nColor: 400\nTotal: 2,400",
+    ("KYOCERA Counter",
+     "Equipment ID: Model Name: ECOSYS M40021cfx Serial Number: 11Y5300412 "
+     "MeterDate: Tue 11 Aug 2026 09:50:56 Counters by Function: Printed Pages: "
+     "Copier: 384 Printer: 3419 FAX: 332 Total: 4135",
      "counter.png", b"not-needed", "kyocera"),
     ("Samsung report", "장비의 카운터 페이지를 첨부합니다.", "counter.rtf",
      b"{\\rtf1 Serial No: SAM-99\\par Black: 3,000\\par Color: 500\\par Total: 3,500}",
@@ -141,12 +147,31 @@ def test_vendor_counter_formats_are_parsed(subject, body, filename, attachment, 
     assert parsed.adapter == adapter
     assert parsed.serial_number
     expected = {
-        "sindoh-plain": {"black": 1200, "color": 300, "total": 1500},
-        "kyocera": {"black": 2000, "color": 400, "total": 2400},
+        "sindoh-plain": {"black": 717, "color": 2153, "total": 2870},
+        "kyocera": {"total": 4135},
         "samsung-rtf": {"black": 3000, "color": 500, "total": 3500},
     }
     assert parsed.counters == expected[adapter]
-    assert set(parsed.counters) == {"black", "color", "total"}
+    assert "total" in parsed.counters
+    if adapter == "sindoh-plain":
+        assert parsed.captured_at.isoformat() == "2026-07-16T00:00:00+00:00"
+    elif adapter == "kyocera":
+        assert parsed.captured_at.isoformat() == "2026-08-11T09:50:56+00:00"
+
+
+def test_samsung_body_escaped_fields_supply_machine_serial():
+    message = EmailMessage(
+        subject="Samsung report",
+        text_body=(r"Host Name\:SEC842519653E78 Host Location: Administrator Name:세강오피스 "
+                   r"Administrator Email Address: skoa\@skoa.co.kr IP Address:192.168.0.200 "
+                   r"Machine Serial Number\:ZJXXBJMK80001HH"),
+        html_body="", attachments=[],
+    )
+
+    parsed = parse_counter_message(message)
+
+    assert parsed.adapter == "samsung-rtf"
+    assert parsed.serial_number == "ZJXXBJMK80001HH"
 
 
 def test_received_counter_mail_automatically_creates_confirmed_readings(client):
