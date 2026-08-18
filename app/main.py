@@ -283,6 +283,29 @@ def mail_list(request: Request, page: int = Query(1, ge=1), q: str = "", account
     })
 
 
+@app.post("/mail/bulk-delete")
+def bulk_delete_messages(
+    scope: str = Form(...), message_ids: list[int] = Form(default=[]),
+    db: Session = Depends(get_db),
+):
+    if scope not in {"selected", "all"}:
+        raise HTTPException(422, "삭제 범위를 올바르게 선택하세요.")
+    query = select(EmailMessage)
+    if scope == "selected":
+        if not message_ids:
+            notice = quote("삭제할 메일을 선택해 주세요")
+            return RedirectResponse(
+                f"/mail?notice={notice}", status_code=303,
+            )
+        query = query.where(EmailMessage.id.in_(set(message_ids)))
+    messages = db.scalars(query).all()
+    for message in messages:
+        db.delete(message)
+    db.commit()
+    notice = quote(f"메일 {len(messages)}건을 삭제했습니다.")
+    return RedirectResponse(f"/mail?notice={notice}", status_code=303)
+
+
 @app.get("/mail/{message_id}", response_class=HTMLResponse)
 def mail_detail(message_id: int, request: Request, db: Session = Depends(get_db)):
     message = db.scalar(select(EmailMessage).options(
