@@ -58,7 +58,12 @@
     // serials only to the label on the selected line, not the whole sample.
     const serialPrefix = prefix.split(/\r?\n/).pop().slice(-80);
     const anchor = isSerial ? escapeRegex(serialPrefix) : stableCounterAnchor(prefix);
-    const valuePattern = isSerial ? '[-A-Za-z0-9._/]+' : numberPattern;
+    // Serial numbers are identifiers: an alphabetic first character is valid.
+    // Requiring an alphanumeric first/last character also avoids capturing a
+    // separator dash before the actual serial.
+    const valuePattern = isSerial
+      ? '[A-Za-z0-9](?:[-A-Za-z0-9._/]*[A-Za-z0-9])?'
+      : numberPattern;
     document.querySelector(`[name="${button.dataset.target}"]`).value = `${anchor}(${valuePattern})`;
     help.textContent = `‘${selected}’의 위치를 지정했습니다. 값의 자릿수가 바뀌어도 이 위치에서 새 값을 읽습니다.`;
   }));

@@ -22,6 +22,9 @@ COUNTER_LABELS = {
     "total": (r"총\s*카운터", r"총\s*매수", r"누적\s*카운터", r"total(?:\s*counter)?"),
 }
 SERIAL_LABELS = (r"시리얼(?:\s*번호)?", r"제조\s*번호", r"serial(?:\s*(?:number|no\.?))?", "s/?n")
+# A serial is an identifier, not a number. Both alphabet-leading values such as
+# W2P123456 and digit-leading values are valid and must be treated identically.
+SERIAL_VALUE_PATTERN = r"[A-Z0-9](?:[A-Z0-9._/-]*[A-Z0-9])?"
 
 
 @dataclass(frozen=True)
@@ -157,7 +160,7 @@ def _sindoh(source: str) -> ParsedCounters:
 def _kyocera(source: str) -> ParsedCounters:
     """Parse Kyocera's aligned header and Counters by Function section."""
     serial = re.search(
-        r"Serial\s+Number\s*:\s*([A-Z0-9._/-]+)", source, re.IGNORECASE,
+        rf"Serial\s+Number\s*:\s*({SERIAL_VALUE_PATTERN})", source, re.IGNORECASE,
     )
     meter_date = re.search(
         r"MeterDate\s*:\s*(?:[A-Za-z]{3}\s+)?(\d{1,2}\s+[A-Za-z]{3}\s+\d{4}\s+\d{2}:\d{2}:\d{2})",
@@ -177,7 +180,7 @@ def _extract(source: str, adapter: str, confidence: float) -> ParsedCounters:
     serial = None
     serial_pattern = "|".join(SERIAL_LABELS)
     match = re.search(
-        rf"(?:{serial_pattern})\s*[:：#]?\s*([A-Z0-9][A-Z0-9._ /-]{{2,}})",
+        rf"(?:{serial_pattern})\s*[:：#]?\s*({SERIAL_VALUE_PATTERN})",
         source, re.IGNORECASE,
     )
     if match:
