@@ -102,6 +102,37 @@ def test_prototype_domain_relations(client):
         assert db.query(CounterReading).one().device.site.organization.name == "테스트 고객사"
 
 
+def test_counter_domain_is_visible_on_website(client):
+    with SessionLocal() as db:
+        organization = Organization(name="웹 고객사")
+        site = Site(name="부산 지점", organization=organization)
+        device = Device(site=site, brand="Acme", model="C200", serial_number="SN-9",
+                        normalized_serial="SN9")
+        account = PopAccount(name="test", host="localhost", port=110, username="u",
+                             encrypted_password=encrypt_password("p"), use_ssl=False)
+        db.add_all([organization, account])
+        db.flush()
+        mime = MimeMessage()
+        mime.set_content("counter")
+        assert store_message(db, account, mime.as_bytes())
+        message = db.query(EmailMessage).one()
+        run = ExtractionRun(email_id=message.id, adapter="counter-parser", adapter_version="2")
+        reading = CounterReading(run=run, device=device, counter_type="total", value=54321,
+                                 captured_at=message.received_at, confidence=.91,
+                                 raw_text="TOTAL 54321")
+        db.add(reading)
+        db.commit()
+        reading_id = reading.id
+
+    page = client.get("/counters")
+    assert page.status_code == 200
+    assert all(text in page.text for text in ("웹 고객사", "Acme C200", "54,321", "검토 필요"))
+    detail = client.get(f"/counters/{reading_id}")
+    assert detail.status_code == 200
+    assert all(text in detail.text for text in ("부산 지점", "TOTAL 54321", "counter-parser"))
+    assert client.get("/counters/9999").status_code == 404
+
+
 def test_update_pop_account_keeps_password_when_blank(client):
     client.post("/settings", data={
         "name": "before", "host": "pop.example.com", "port": "995",

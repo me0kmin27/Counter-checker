@@ -6,6 +6,7 @@
 <p class="nav-label">WORKSPACE</p><nav aria-label="주 메뉴">
 <a href="/" class="{% if request.url.path == '/' %}active{% endif %}"><span class="nav-icon" aria-hidden="true">⌂</span>대시보드</a>
 <a href="/mail" class="{% if request.url.path.startswith('/mail') %}active{% endif %}"><span class="nav-icon" aria-hidden="true">✉</span>받은 메일</a>
+<a href="/counters" class="{% if request.url.path.startswith('/counters') %}active{% endif %}"><span class="nav-icon" aria-hidden="true">▥</span>카운터 현황</a>
 <a href="/settings" class="{% if request.url.path == '/settings' %}active{% endif %}"><span class="nav-icon" aria-hidden="true">⚙</span>POP 설정</a>
 </nav><div class="aside-note"><span class="note-icon">↻</span><div><b>자동 수집 실행 중</b><small>활성 계정을 5분마다 확인합니다.</small></div></div><div class="version">COUNTER CHECKER · MVP 1.0</div></aside>
 <main id="main-content"><header><div><p class="eyebrow">MAIL OPERATIONS</p><h1>{% block heading %}{% endblock %}</h1><p class="page-description">{% block description %}{% endblock %}</p></div><span class="status {% if errors %}warning{% endif %}"><i></i>{% if errors %}확인 필요 {{ errors }}건{% else %}시스템 정상{% endif %}</span></header>

@@ -11,7 +11,10 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from .database import Base, SessionLocal, engine, ensure_compatibility_schema, get_db
-from .models import Attachment, EmailMessage, PopAccount
+from .models import (
+    Attachment, CounterReading, Device, EmailMessage, ExtractionRun, Organization,
+    PopAccount, ProcessingEvent, Site,
+)
 from .pop_service import fetch_account
 from .security import encrypt_password
 
@@ -83,6 +86,58 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
         "accounts": accounts, "active_accounts": active_accounts, "messages": messages,
         "attachments": attachments, "latest": latest, "errors": errors,
     })
+
+
+@app.get("/counters", response_class=HTMLResponse)
+def counter_workspace(request: Request, db: Session = Depends(get_db)):
+    """Expose the counter-analysis domain that is already persisted by the application."""
+    counts = {
+        "organizations": db.scalar(select(func.count()).select_from(Organization)) or 0,
+        "sites": db.scalar(select(func.count()).select_from(Site)) or 0,
+        "devices": db.scalar(select(func.count()).select_from(Device)) or 0,
+        "readings": db.scalar(select(func.count()).select_from(CounterReading)) or 0,
+    }
+    pending = db.scalar(
+        select(func.count()).select_from(CounterReading)
+        .where(CounterReading.status == "needs_review")
+    ) or 0
+    readings = db.scalars(
+        select(CounterReading).options(
+            selectinload(CounterReading.device).selectinload(Device.site)
+            .selectinload(Site.organization),
+            selectinload(CounterReading.run),
+        ).order_by(CounterReading.captured_at.desc()).limit(30)
+    ).all()
+    devices = db.scalars(
+        select(Device).options(
+            selectinload(Device.site).selectinload(Site.organization),
+            selectinload(Device.readings),
+        ).order_by(Device.id.desc()).limit(20)
+    ).all()
+    runs = db.scalars(
+        select(ExtractionRun).order_by(ExtractionRun.created_at.desc()).limit(10)
+    ).all()
+    events = db.scalars(
+        select(ProcessingEvent).order_by(ProcessingEvent.created_at.desc()).limit(10)
+    ).all()
+    return templates.TemplateResponse(request, "counters.html", {
+        "counts": counts, "pending": pending, "readings": readings,
+        "devices": devices, "runs": runs, "events": events,
+    })
+
+
+@app.get("/counters/{reading_id}", response_class=HTMLResponse)
+def counter_detail(reading_id: int, request: Request, db: Session = Depends(get_db)):
+    reading = db.scalar(
+        select(CounterReading).options(
+            selectinload(CounterReading.device).selectinload(Device.site)
+            .selectinload(Site.organization),
+            selectinload(CounterReading.run), selectinload(CounterReading.reviews),
+        ).where(CounterReading.id == reading_id)
+    )
+    if not reading:
+        raise HTTPException(404)
+    return templates.TemplateResponse(request, "counter_detail.html", {"reading": reading})
 
 
 @app.get("/settings", response_class=HTMLResponse)
