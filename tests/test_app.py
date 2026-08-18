@@ -3,6 +3,10 @@ from email.message import EmailMessage as MimeMessage
 import socket
 from unittest.mock import MagicMock, call, patch
 
+from sqlalchemy.dialects import mysql
+from sqlalchemy.exc import DataError
+from sqlalchemy.schema import CreateTable
+
 from app.database import SessionLocal
 from app.models import CounterReading, Device, EmailMessage, ExtractionRun, Organization, PopAccount, Site
 from app.pop_service import _create_pop_socket, describe_connection_error, fetch_account, store_message
@@ -199,6 +203,25 @@ def test_timeout_error_does_not_assume_a_firewall_problem():
     assert "연결 또는 응답" in error
     assert "POP 사용 허용 여부" in error
     assert "방화벽" not in error
+
+
+def test_database_size_error_is_sanitized_and_actionable():
+    error = describe_connection_error(DataError(
+        "INSERT INTO email_messages ...", {}, Exception("Data too long for raw_message")
+    ))
+
+    assert "DB 스키마 업데이트" in error
+    assert "INSERT INTO" not in error
+
+
+def test_mysql_message_and_attachment_payloads_use_longblob():
+    message_ddl = str(CreateTable(EmailMessage.__table__).compile(dialect=mysql.dialect()))
+    attachment_ddl = str(CreateTable(Attachment.__table__).compile(dialect=mysql.dialect()))
+
+    assert "raw_message LONGBLOB" in message_ddl
+    assert "text_body LONGTEXT" in message_ddl
+    assert "html_body LONGTEXT" in message_ddl
+    assert "content LONGBLOB" in attachment_ddl
 
 
 def test_pop_socket_tries_ipv4_before_ipv6_and_falls_back():

@@ -5,8 +5,13 @@ from sqlalchemy import (
     Integer, JSON, LargeBinary, String, Text, UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.dialects.mysql import LONGBLOB, LONGTEXT
 
 from .database import Base
+
+
+LONG_BINARY = LargeBinary().with_variant(LONGBLOB(), "mysql")
+LONG_TEXT = Text().with_variant(LONGTEXT(), "mysql")
 
 
 class PopAccount(Base):
@@ -53,9 +58,9 @@ class EmailMessage(Base):
     subject: Mapped[str] = mapped_column(Text, default="")
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-    text_body: Mapped[str] = mapped_column(Text, default="")
-    html_body: Mapped[str] = mapped_column(Text, default="")
-    raw_message: Mapped[bytes] = mapped_column(LargeBinary)
+    text_body: Mapped[str] = mapped_column(LONG_TEXT, default="")
+    html_body: Mapped[str] = mapped_column(LONG_TEXT, default="")
+    raw_message: Mapped[bytes] = mapped_column(LONG_BINARY)
     attachment_count: Mapped[int] = mapped_column(Integer, default=0)
     status: Mapped[str] = mapped_column(String(30), default="received")
     account: Mapped[PopAccount] = relationship(back_populates="messages")
@@ -73,7 +78,7 @@ class Attachment(Base):
     mime_type: Mapped[str] = mapped_column(String(255), default="application/octet-stream")
     size_bytes: Mapped[int] = mapped_column(Integer)
     content_sha256: Mapped[str] = mapped_column(String(64))
-    content: Mapped[bytes] = mapped_column(LargeBinary)
+    content: Mapped[bytes] = mapped_column(LONG_BINARY)
     message: Mapped[EmailMessage] = relationship(back_populates="attachments")
 
 

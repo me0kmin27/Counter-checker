@@ -100,5 +100,10 @@ Outlook 고급 설정과 같은 형태로 POP의 SSL/TLS 및 SPA 선택값과 SM
   적용합니다. 계속 시간 초과가 발생하면 메일 제공업체에서 POP 사용을 별도로 활성화해야 하는지와
   SSL 사용 시 포트가 995인지 확인하십시오.
 - **설정 변경이 반영되지 않음**: `make stop`, `make start` 순서로 컨테이너를 다시 만듭니다.
+- **`Data too long for column 'raw_message'`**: 이전 버전에서 생성한 MariaDB의 `BLOB` 컬럼은
+  약 64KiB까지만 저장할 수 있습니다. 최신 버전은 원문 메일과 첨부파일을 `LONGBLOB`, 본문을
+  `LONGTEXT`로 자동 확장하므로 `make start`를 실행해 이미지를 다시 빌드하고 업데이트를 적용하십시오.
+  적용 여부는 `docker compose exec mariadb mariadb -u root -p -e "SHOW COLUMNS FROM
+  counter_checker.email_messages LIKE 'raw_message';"`에서 형식이 `longblob`인지 확인할 수 있습니다.
 - **데이터까지 완전히 삭제해야 함**: `make stop`은 데이터를 보존합니다. 데이터 삭제는 복구할 수
   없으므로 백업 후에만 직접 `docker compose down --volumes`를 실행합니다.

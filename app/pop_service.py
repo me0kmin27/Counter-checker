@@ -10,7 +10,7 @@ from email.parser import BytesParser
 from email.utils import getaddresses, parsedate_to_datetime
 
 from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DataError, IntegrityError
 from sqlalchemy.orm import Session
 
 from .models import Attachment, EmailMessage, PopAccount
@@ -73,7 +73,12 @@ class _IPv4PreferredPOP3SSL(poplib.POP3_SSL):
 
 def describe_connection_error(exc: Exception) -> str:
     """Return a useful, password-safe error for the POP settings screen."""
-    if isinstance(exc, socket.gaierror):
+    if isinstance(exc, DataError):
+        detail = (
+            "메일 데이터가 데이터베이스 컬럼의 저장 한도를 초과했습니다. "
+            "서비스를 최신 이미지로 다시 빌드하고 시작하여 DB 스키마 업데이트를 적용하세요."
+        )
+    elif isinstance(exc, socket.gaierror):
         detail = "POP 서버 주소를 찾을 수 없습니다. 서버 주소를 확인하세요."
     elif isinstance(exc, (TimeoutError, socket.timeout)):
         detail = (
