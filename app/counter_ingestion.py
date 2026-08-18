@@ -22,6 +22,9 @@ COUNTER_LABELS = {
     "total": (r"총\s*카운터", r"총\s*매수", r"누적\s*카운터", r"total(?:\s*counter)?"),
 }
 SERIAL_LABELS = (r"시리얼(?:\s*번호)?", r"제조\s*번호", r"serial(?:\s*(?:number|no\.?))?", "s/?n")
+# A serial is an identifier, not a number. Both alphabet-leading values such as
+# W2P123456 and digit-leading values are valid and must be treated identically.
+SERIAL_VALUE_PATTERN = r"[A-Z0-9](?:[A-Z0-9._/-]*[A-Z0-9])?"
 
 
 @dataclass(frozen=True)
@@ -157,7 +160,7 @@ def _sindoh(source: str) -> ParsedCounters:
 def _kyocera(source: str) -> ParsedCounters:
     """Parse Kyocera's aligned header and Counters by Function section."""
     serial = re.search(
-        r"Serial\s+Number\s*:\s*([A-Z0-9._/-]+)", source, re.IGNORECASE,
+        rf"Serial\s+Number\s*:\s*({SERIAL_VALUE_PATTERN})", source, re.IGNORECASE,
     )
     meter_date = re.search(
         r"MeterDate\s*:\s*(?:[A-Za-z]{3}\s+)?(\d{1,2}\s+[A-Za-z]{3}\s+\d{4}\s+\d{2}:\d{2}:\d{2})",
@@ -177,7 +180,7 @@ def _extract(source: str, adapter: str, confidence: float) -> ParsedCounters:
     serial = None
     serial_pattern = "|".join(SERIAL_LABELS)
     match = re.search(
-        rf"(?:{serial_pattern})\s*[:：#]?\s*([A-Z0-9][A-Z0-9._ /-]{{2,}})",
+        rf"(?:{serial_pattern})\s*[:：#]?\s*({SERIAL_VALUE_PATTERN})",
         source, re.IGNORECASE,
     )
     if match:
@@ -204,15 +207,26 @@ def _extract(source: str, adapter: str, confidence: float) -> ParsedCounters:
 def _custom_rule(message: EmailMessage, rules: list[BotRule]) -> ParsedCounters | None:
     subject, sender = message.subject or "", message.sender or ""
 
-    def source_for(source_type: str) -> str:
+    def source_for(source_type: str, filename_keyword: str | None = None) -> str:
+        def selected(item) -> bool:
+            return not filename_keyword or filename_keyword.casefold() in item.filename.casefold()
+
         if source_type == "rtf":
             return "\n".join(
                 _rtf_to_text(item.content) for item in message.attachments
-                if item.filename.lower().endswith(".rtf")
-                or item.mime_type in {"application/rtf", "text/rtf"}
+                if selected(item) and (
+                    item.filename.lower().endswith(".rtf")
+                    or item.mime_type.casefold().split(";", 1)[0] in {"application/rtf", "text/rtf"}
+                )
             )
         if source_type == "html_attachment":
-            return _html_attachments(message)
+            return "\n".join(
+                _html_to_text(item.content) for item in message.attachments
+                if selected(item) and (
+                    item.mime_type.casefold().split(";", 1)[0] in {"text/html", "application/xhtml+xml"}
+                    or item.filename.casefold().endswith((".htm", ".html"))
+                )
+            )
         if source_type == "ocr":
             return _ocr_images(message)
         return f"{subject}\n{message.text_body}\n{html.unescape(re.sub('<[^>]+>', ' ', message.html_body))}"
@@ -220,8 +234,17 @@ def _custom_rule(message: EmailMessage, rules: list[BotRule]) -> ParsedCounters 
     for rule in rules:
         if not rule.enabled or (rule.subject_keyword and rule.subject_keyword.casefold() not in subject.casefold()) or (rule.sender_keyword and rule.sender_keyword.casefold() not in sender.casefold()):
             continue
-        counter_source = source_for(rule.source_type)
-        serial_source = source_for(rule.serial_source_type or rule.source_type)
+        counter_filename = rule.attachment_filename if rule.source_type in {
+            "html_attachment", "rtf", "ocr",
+        } else None
+        serial_source_type = rule.serial_source_type or rule.source_type
+        serial_filename = None
+        if serial_source_type in {"html_attachment", "rtf", "ocr"}:
+            serial_filename = rule.serial_attachment_filename or counter_filename
+        counter_source = source_for(rule.source_type, counter_filename)
+        serial_source = source_for(
+            serial_source_type, serial_filename,
+        )
         if not counter_source and not serial_source:
             continue
         try:

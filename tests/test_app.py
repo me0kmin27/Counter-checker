@@ -712,6 +712,22 @@ def test_kyocera_counter_is_parsed_from_htm_attachment():
     assert parsed.counters == {"total": 4135}
 
 
+def test_kyocera_alphabet_leading_serial_is_valid():
+    message = EmailMessage(subject="KYOCERA Counter", sender="device@example.com",
+                           text_body="첨부 참조", html_body="", attachments=[])
+    report = (b"<html><body>Serial Number: W2P1234567 "
+              b"Counters by Function: Total: 9,876</body></html>")
+    message.attachments.append(Attachment(
+        filename="Counter_Function.htm", mime_type="text/html",
+        size_bytes=len(report), content_sha256="a" * 64, content=report,
+    ))
+
+    parsed = parse_counter_message(message)
+
+    assert parsed.serial_number == "W2P1234567"
+    assert parsed.counters == {"total": 9876}
+
+
 def test_custom_bot_rule_can_target_htm_attachment():
     from app.models import BotRule
 
@@ -756,6 +772,56 @@ def test_custom_rule_can_read_kyocera_serial_from_mail_and_counters_from_attachm
 
     assert parsed.serial_number == "RJF3201840"
     assert parsed.counters == {"black": 1, "color": 100000, "total": 100001}
+
+
+def test_custom_rule_reads_only_the_named_kyocera_attachment():
+    from app.models import BotRule
+
+    message = EmailMessage(subject="KYOCERA", sender="device@example.com",
+                           text_body="Serial Number: KYO-77", html_body="", attachments=[])
+    for filename, total in (("old-counter.htm", "999"), ("monthly-counter.htm", "1,234")):
+        report = f"<html><body>Total: {total}</body></html>".encode()
+        message.attachments.append(Attachment(
+            filename=filename, mime_type="text/html", size_bytes=len(report),
+            content_sha256="4" * 64, content=report,
+        ))
+    rule = BotRule(
+        brand="교세라", source_type="html_attachment", serial_source_type="email",
+        attachment_filename="monthly-counter.htm",
+        # A stale attachment value must never be applied to an email source.
+        serial_attachment_filename="does-not-exist.htm", enabled=True,
+        serial_pattern=r"Serial Number:\s*([A-Z0-9-]+)",
+        total_pattern=r"Total:\s*([0-9,]+)",
+    )
+
+    parsed = parse_counter_message(message, [rule])
+
+    assert parsed.serial_number == "KYO-77"
+    assert parsed.counters == {"total": 1234}
+
+
+def test_custom_samsung_rule_reads_serial_and_counters_from_named_rtf():
+    from app.models import BotRule
+
+    message = EmailMessage(subject="Samsung", sender="device@example.com",
+                           text_body="첨부 참조", html_body="", attachments=[])
+    report = b"{\\rtf1 Serial No: SAM-88\\par Black: 100\\par Color: 20\\par Total: 120}"
+    message.attachments.append(Attachment(
+        filename="samsung-meter.rtf", mime_type="application/octet-stream",
+        size_bytes=len(report), content_sha256="5" * 64, content=report,
+    ))
+    rule = BotRule(
+        brand="삼성", source_type="rtf", serial_source_type="rtf",
+        attachment_filename="samsung-meter.rtf", enabled=True,
+        serial_pattern=r"Serial No:\s*([A-Z0-9-]+)",
+        black_pattern=r"Black:\s*([0-9,]+)", color_pattern=r"Color:\s*([0-9,]+)",
+        total_pattern=r"Total:\s*([0-9,]+)",
+    )
+
+    parsed = parse_counter_message(message, [rule])
+
+    assert parsed.serial_number == "SAM-88"
+    assert parsed.counters == {"black": 100, "color": 20, "total": 120}
 
 
 @pytest.mark.parametrize(("filename", "mime_type", "payload", "expected"), [

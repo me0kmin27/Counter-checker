@@ -677,6 +677,8 @@ def bot_settings(request: Request, db: Session = Depends(get_db)):
 @app.post("/bot-settings")
 def add_bot_rule(brand: str = Form(...), source_type: str = Form(...),
                  serial_source_type: str = Form("email"),
+                 attachment_filename: str = Form(""),
+                 serial_attachment_filename: str = Form(""),
                  subject_keyword: str = Form(""), sender_keyword: str = Form(""),
                  sample_format: str = Form(""), serial_pattern: str = Form(...),
                  black_pattern: str = Form(""), color_pattern: str = Form(""),
@@ -693,6 +695,8 @@ def add_bot_rule(brand: str = Form(...), source_type: str = Form(...),
         raise HTTPException(422, "각 타겟 정규식에는 추출할 값을 감싸는 그룹 ( )이 필요합니다.")
     db.add(BotRule(brand=brand.strip(), source_type=source_type,
                    serial_source_type=serial_source_type,
+                   attachment_filename=attachment_filename.strip() or None,
+                   serial_attachment_filename=serial_attachment_filename.strip() or None,
                    subject_keyword=subject_keyword.strip() or None,
                    sender_keyword=sender_keyword.strip() or None, sample_format=sample_format,
                    serial_pattern=serial_pattern.strip(), black_pattern=black_pattern.strip() or None,
