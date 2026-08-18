@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from .database import Base, SessionLocal, engine, ensure_compatibility_schema, get_db
 from .models import (
-    Attachment, BotRule, CounterReading, Device, EmailMessage, ExtractionRun, Organization,
+    Attachment, BotRule, CounterReading, Device, DeviceReplacement, EmailMessage, ExtractionRun, Organization,
     PopAccount, ProcessingEvent, Site, User,
 )
 from .pop_service import fetch_account
@@ -421,7 +421,9 @@ def customers(request: Request, q: str = Query("", max_length=200),
 @app.post("/customers")
 def add_customer(company_name: str = Form(...), model_name: str = Form(...),
                  serial_number: str = Form(...), phone: str = Form(...), email: str = Form(...),
-                 started_at: str = Form(...),
+                 started_at: str = Form(...), monthly_black_allowance: int = Form(0, ge=0),
+                 monthly_color_allowance: int = Form(0, ge=0),
+                 initial_black_counter: int = Form(0, ge=0), initial_color_counter: int = Form(0, ge=0),
                  db: Session = Depends(get_db)):
     company_name, model_name = company_name.strip(), model_name.strip()
     serial_number, phone, email = serial_number.strip(), phone.strip(), email.strip()
@@ -434,10 +436,14 @@ def add_customer(company_name: str = Form(...), model_name: str = Form(...),
     normalized_serial = "".join(serial_number.upper().split())
     if db.scalar(select(Device.id).where(Device.normalized_serial == normalized_serial)):
         raise HTTPException(422, "이미 등록된 시리얼넘버입니다.")
-    organization = Organization(name=company_name, phone=phone, email=email)
+    organization = Organization(name=company_name, phone=phone, email=email,
+                                monthly_black_allowance=monthly_black_allowance,
+                                monthly_color_allowance=monthly_color_allowance)
     site = Site(name="기본 사업장")
     site.devices.append(Device(brand="미지정", model=model_name, serial_number=serial_number,
-                               normalized_serial=normalized_serial, installed_at=installed_at))
+                               normalized_serial=normalized_serial, installed_at=installed_at,
+                               initial_black_counter=initial_black_counter,
+                               initial_color_counter=initial_color_counter))
     organization.sites.append(site)
     db.add(organization)
     db.commit()
@@ -448,6 +454,10 @@ def add_customer(company_name: str = Form(...), model_name: str = Form(...),
 def edit_customer(organization_id: int, company_name: str = Form(...),
                   model_name: str = Form(...), serial_number: str = Form(...),
                   phone: str = Form(...), email: str = Form(...), started_at: str = Form(...),
+                  monthly_black_allowance: int = Form(0, ge=0), monthly_color_allowance: int = Form(0, ge=0),
+                  initial_black_counter: int = Form(0, ge=0), initial_color_counter: int = Form(0, ge=0),
+                  previous_final_black_counter: int = Form(0, ge=0),
+                  previous_final_color_counter: int = Form(0, ge=0),
                   db: Session = Depends(get_db)):
     organization = db.scalar(select(Organization).options(
         selectinload(Organization.sites).selectinload(Site.devices)
@@ -462,7 +472,8 @@ def edit_customer(organization_id: int, company_name: str = Form(...),
         raise HTTPException(422, "사용시작일을 올바르게 입력하세요.")
     if not all((company_name, model_name, serial_number, phone, email)) or "@" not in email:
         raise HTTPException(422, "거래처 정보를 올바르게 입력하세요.")
-    device = organization.sites[0].devices[0]
+    site = organization.sites[0]
+    device = max(site.devices, key=lambda item: item.id)
     normalized_serial = "".join(serial_number.upper().split())
     duplicate = db.scalar(select(Device.id).where(
         Device.normalized_serial == normalized_serial, Device.id != device.id
@@ -470,8 +481,26 @@ def edit_customer(organization_id: int, company_name: str = Form(...),
     if duplicate:
         raise HTTPException(422, "이미 등록된 시리얼넘버입니다.")
     organization.name, organization.phone, organization.email = company_name, phone, email
-    device.model, device.serial_number = model_name, serial_number
-    device.normalized_serial, device.installed_at = normalized_serial, installed_at
+    organization.monthly_black_allowance = monthly_black_allowance
+    organization.monthly_color_allowance = monthly_color_allowance
+    if normalized_serial != device.normalized_serial:
+        device.retired_at = installed_at
+        new_device = Device(site=site, brand=device.brand, model=model_name,
+                            serial_number=serial_number, normalized_serial=normalized_serial,
+                            installed_at=installed_at, initial_black_counter=initial_black_counter,
+                            initial_color_counter=initial_color_counter)
+        db.add(new_device)
+        db.flush()
+        db.add(DeviceReplacement(
+            site=site, previous_device=device, new_device=new_device, replaced_at=installed_at,
+            previous_final_black_counter=previous_final_black_counter,
+            previous_final_color_counter=previous_final_color_counter,
+            new_initial_black_counter=initial_black_counter,
+            new_initial_color_counter=initial_color_counter,
+        ))
+    else:
+        device.model, device.installed_at = model_name, installed_at
+        device.initial_black_counter, device.initial_color_counter = initial_black_counter, initial_color_counter
     db.commit()
     return RedirectResponse("/customers?notice=" + quote("거래처 정보를 수정했습니다."), 303)
 

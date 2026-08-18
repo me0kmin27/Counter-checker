@@ -5,4 +5,8 @@
   <label>전화번호<input type="tel" name="phone" value="{{ phone|default('') }}" maxlength="50" required></label>
   <label>메일주소<input type="email" name="email" value="{{ email|default('') }}" maxlength="320" required></label>
   <label>사용시작일<input type="date" name="started_at" value="{{ started_at|default('') }}" required></label>
+  <label>월 흑백 계약매수<input type="number" name="monthly_black_allowance" value="{{ monthly_black_allowance|default(0) }}" min="0" required></label>
+  <label>월 컬러 계약매수<input type="number" name="monthly_color_allowance" value="{{ monthly_color_allowance|default(0) }}" min="0" required></label>
+  <label>흑백 초기카운터<input type="number" name="initial_black_counter" value="{{ initial_black_counter|default(0) }}" min="0" required></label>
+  <label>컬러 초기카운터<input type="number" name="initial_color_counter" value="{{ initial_color_counter|default(0) }}" min="0" required></label>
 </div>

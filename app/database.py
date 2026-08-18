@@ -53,6 +53,17 @@ def ensure_compatibility_schema():
                 connection.execute(text("ALTER TABLE organizations ADD COLUMN phone VARCHAR(50)"))
             if "email" not in organization_columns:
                 connection.execute(text("ALTER TABLE organizations ADD COLUMN email VARCHAR(320)"))
+            if "monthly_black_allowance" not in organization_columns:
+                connection.execute(text("ALTER TABLE organizations ADD COLUMN monthly_black_allowance BIGINT NOT NULL DEFAULT 0"))
+            if "monthly_color_allowance" not in organization_columns:
+                connection.execute(text("ALTER TABLE organizations ADD COLUMN monthly_color_allowance BIGINT NOT NULL DEFAULT 0"))
+    if "devices" in table_names:
+        device_columns = {column["name"] for column in inspect(engine).get_columns("devices")}
+        with engine.begin() as connection:
+            if "initial_black_counter" not in device_columns:
+                connection.execute(text("ALTER TABLE devices ADD COLUMN initial_black_counter BIGINT NOT NULL DEFAULT 0"))
+            if "initial_color_counter" not in device_columns:
+                connection.execute(text("ALTER TABLE devices ADD COLUMN initial_color_counter BIGINT NOT NULL DEFAULT 0"))
     if "pop_accounts" not in table_names:
         return
     columns = {column["name"] for column in inspect(engine).get_columns("pop_accounts")}
