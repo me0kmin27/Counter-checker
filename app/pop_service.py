@@ -71,6 +71,50 @@ class _IPv4PreferredPOP3SSL(poplib.POP3_SSL):
         return self.context.wrap_socket(sock, server_hostname=self.host)
 
 
+def _create_pop_socket(host: str, port: int, timeout: float | None) -> socket.socket:
+    """Connect over IPv4 first and fall back to IPv6 when IPv4 is unavailable."""
+    if timeout is not None and timeout <= 0:
+        raise ValueError("Non-blocking sockets are not supported")
+
+    addresses = []
+    resolution_errors = []
+    for family in (socket.AF_INET, socket.AF_INET6):
+        try:
+            addresses.extend(socket.getaddrinfo(host, port, family, socket.SOCK_STREAM))
+        except socket.gaierror as exc:
+            resolution_errors.append(exc)
+
+    if not addresses:
+        if resolution_errors:
+            raise resolution_errors[-1]
+        raise socket.gaierror(f"No address found for {host}")
+
+    connection_errors = []
+    for family, socktype, proto, _, sockaddr in addresses:
+        sock = socket.socket(family, socktype, proto)
+        try:
+            sock.settimeout(timeout)
+            sock.connect(sockaddr)
+            return sock
+        except OSError as exc:
+            connection_errors.append(exc)
+            sock.close()
+
+    # Prefer an IPv4 error over a misleading final IPv6 ENETUNREACH error.
+    raise connection_errors[0]
+
+
+class _IPv4PreferredPOP3(poplib.POP3):
+    def _create_socket(self, timeout):
+        return _create_pop_socket(self.host, self.port, timeout)
+
+
+class _IPv4PreferredPOP3SSL(poplib.POP3_SSL):
+    def _create_socket(self, timeout):
+        sock = _create_pop_socket(self.host, self.port, timeout)
+        return self.context.wrap_socket(sock, server_hostname=self.host)
+
+
 def describe_connection_error(exc: Exception) -> str:
     """Return a useful, password-safe error for the POP settings screen."""
     if isinstance(exc, socket.gaierror):
