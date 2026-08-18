@@ -1,103 +1,74 @@
 # Counter Checker
 
-복사기의 카운터 통지 메일을 POP3/POP3S로 수신해 보관하고 웹에서 확인하는 1차 MVP입니다.
-현재 범위는 **메일 수신·저장·조회까지**이며 OCR과 카운터 값 분석은 후속 단계입니다.
+복사기 카운터 통지 메일을 POP3/POP3S로 수신하고 조회하는 FastAPI 애플리케이션입니다.
+현재 범위는 메일 수신·저장·조회이며 OCR과 카운터 자동 분석은 후속 단계입니다.
 
-## 구현 환경
+## 기술 방향
 
-Docker 없이 Debian 서버에 직접 설치하는 구성을 기준으로 합니다.
+이 저장소의 실행 경로는 **Python 하나로 통일**합니다.
 
-- Debian 12 이상
-- Nginx
-- PHP-FPM / PHP CLI 8.2 이상
-- MariaDB
-- PHP 확장: PDO MySQL, mbstring, OpenSSL
-- 5분 주기 POP 수신: cron
+- Python 3.12, FastAPI, Uvicorn
+- SQLAlchemy와 MariaDB (로컬 개발은 SQLite)
+- Jinja2 서버 렌더링
+- Python 표준 라이브러리 `poplib` 기반 POP 수신
+- Fernet 방식 POP 비밀번호 암호화
+- 운영 보조 명령도 모두 `scripts/*.py`
 
-## 주요 기능
+PHP 런타임, PHP-FPM, PHP 설정 파일 및 PHP 수신기는 사용하지 않습니다. 데이터베이스 테이블은
+Python SQLAlchemy 모델에서 생성합니다.
 
-- 웹에서 POP 서버, 포트, TLS, 사용자, 서버 삭제 정책 설정
-- 웹에서 즉시 수신하거나 cron으로 활성 계정을 5분마다 자동 수신
-- MIME 메일의 원문과 첨부는 비공개 파일 경로에, 검색용 메타데이터와 본문은 MariaDB에 저장
-- 계정별 원문 SHA-256 unique 제약으로 중복 저장 방지
-- 받은 메일 목록, 본문, 첨부 파일 다운로드 및 계정 연결 오류 확인
-- POP 비밀번호는 OpenSSL AES-256-GCM로 인증 암호화
-- 관리자 로그인, CSRF 보호, HttpOnly/SameSite 세션 쿠키
+## 로컬 실행
 
-## Debian 설치
-
-저장소를 배포할 위치에 내려받은 뒤 설치 스크립트를 root로 실행합니다.
+Python 3.12가 설치된 환경에서 다음 명령을 실행합니다.
 
 ```bash
-sudo ./scripts/install-debian.sh
+make bootstrap
+make dev
 ```
 
-스크립트가 패키지를 설치하고 다음 값을 대화식으로 받습니다.
-
-- 서비스 표시 이름과 웹 도메인/IP
-- MariaDB 호스트, 포트, DB 이름, 애플리케이션 DB 사용자/비밀번호
-- 스키마 생성을 위한 DB 관리자 계정/비밀번호
-- 웹 관리자 아이디/비밀번호
-- HTTPS 세션 쿠키 사용 여부
-
-입력한 비밀값과 자동 생성된 암호화 키는 Git 작업 폴더가 아닌
-`/etc/counter-checker/config.php`에 저장됩니다. 공개 저장소에는 운영 도메인, 이메일 주소,
-계정, 비밀번호, 암호화 키와 같은 식별 가능 정보나 고정 secret을 포함하지 않습니다.
-설치 후 `/etc/nginx/sites-available/counter-checker`에 TLS 인증서를 연결하고
-`session_secure`를 `true`로 바꾸는 것을 권장합니다.
-
-## 사용 방법
-
-1. 설치할 Debian 서버에서 `sudo ./scripts/install-debian.sh`를 실행합니다.
-2. 설치 중 입력한 도메인 또는 서버 IP를 브라우저로 엽니다.
-3. 설치 중 만든 웹 관리자 아이디와 비밀번호로 로그인합니다.
-4. 왼쪽 메뉴에서 **POP 설정**을 선택하고 수신 계정을 등록합니다.
-5. 등록한 계정의 **지금 받기**를 눌러 연결 및 수신 여부를 먼저 확인합니다.
-6. **받은 메일**에서 수신한 메일의 본문과 첨부 파일을 확인합니다.
-7. 이후 활성화된 계정은 cron이 5분마다 자동으로 확인합니다.
+`make bootstrap`은 `.venv`를 만들고 의존성을 설치하며, `.env.example`을 바탕으로 `.env`를
+생성합니다. 비어 있는 `APP_SECRET_KEY`에는 Fernet 호환 키를 최초 한 번만 생성합니다. 개발
+서버는 기본적으로 `http://127.0.0.1:8000`에서 실행되고 SQLite 파일을 사용합니다.
 
 ## Docker Compose 실행
-
-처음 실행할 때는 다음 명령을 사용합니다. `.env`가 없거나 `APP_SECRET_KEY`가 비어 있으면
-실행 전에 Fernet 호환 비밀키를 자동 생성하며, 이미 설정된 키는 변경하지 않습니다.
 
 ```bash
 make compose-up
 ```
 
-`docker compose up`을 직접 실행하려면 먼저 `./scripts/ensure-compose-env.sh`를 한 번 실행하세요.
-운영 중 `APP_SECRET_KEY`를 변경하면 저장된 POP 비밀번호를 복호화할 수 없으므로 기존 `.env`를
-안전하게 보관해야 합니다.
+이 명령은 Python 환경 준비 스크립트로 `.env`와 암호화 키를 확인한 다음 FastAPI와 MariaDB를
+시작합니다. 운영 중 `APP_SECRET_KEY`를 변경하면 기존 POP 비밀번호를 복호화할 수 없으므로
+`.env`를 안전하게 백업해야 합니다.
 
-POP 계정 등록, 화면별 기능, 자동 수신 확인 및 오류 해결 방법은
-[사용 방법 문서](docs/usage.md)에 자세히 정리되어 있습니다.
-
-### 기존 MariaDB를 사용할 때
-
-설치 스크립트에서 원격 DB 호스트를 입력할 수 있습니다. 관리자 계정은 설치 시 스키마와
-최소 권한 애플리케이션 계정을 만드는 데만 사용되며 설정 파일에 저장되지 않습니다.
-애플리케이션 DB 계정에는 대상 DB의 `SELECT`, `INSERT`, `UPDATE`, `DELETE` 권한만 부여합니다.
-
-## 설정 방식
-
-런타임 설정 파일 경로는 기본적으로 `/etc/counter-checker/config.php`입니다. 다른 위치를
-사용하려면 Nginx/PHP-FPM 및 cron에 `COUNTER_CHECKER_CONFIG` 환경 변수를 지정합니다.
-로컬 개발에 한해 `config/config.example.php`를 `config/config.php`로 복사한 후 환경 변수를
-입력할 수 있으며, 실제 설정 파일은 `.gitignore`에서 제외됩니다.
-
-## 수동 메일 수신 및 점검
+종료하려면 다음을 실행합니다.
 
 ```bash
-sudo -u www-data COUNTER_CHECKER_CONFIG=/etc/counter-checker/config.php php scripts/fetch-mail.php
-php tests/run.php
-find public src scripts tests -name '*.php' -print0 | xargs -0 -n1 php -l
+make compose-down
 ```
 
-수신 원문과 첨부는 기본적으로 `var/mail/YYYY/MM`에 저장되며 Nginx의 document root인
-`public/` 밖에 위치합니다. 운영 전 저장 공간, 백업, 보존 기간을 환경에 맞게 결정하십시오.
+## 명령 체계
 
-## 다음 구현 범위
+| 목적 | 명령 |
+| --- | --- |
+| 개발 환경 구성 | `python3 scripts/bootstrap.py` 또는 `make bootstrap` |
+| 개발 서버 실행 | `.venv/bin/python scripts/dev.py` 또는 `make dev` |
+| 전체 테스트 | `.venv/bin/pytest` 또는 `make test` |
+| 활성 POP 계정 즉시 수신 | `.venv/bin/python scripts/fetch_mail.py` |
+| Compose 환경 파일 확인 | `python3 scripts/ensure_compose_env.py` |
 
-저장된 원문/첨부를 입력으로 하는 OCR Adapter, 브랜드별 본문 Parser, 카운터 검증 및
-수동 검수 화면은 다음 단계에서 구현합니다. OCR 결과는 원본 메일을 덮어쓰지 않고 별도의
-처리 실행 및 결과 테이블에 기록할 예정입니다.
+배포 환경에서는 `DATABASE_URL`, `APP_SECRET_KEY`, `POLL_INTERVAL_SECONDS`를 환경 변수로
+전달합니다. 활성 POP 계정은 FastAPI 프로세스 내부 polling task가 기본 5분 간격으로 확인하므로
+별도의 PHP cron 작업은 필요하지 않습니다.
+
+## 설정
+
+`.env.example`의 항목은 다음과 같습니다.
+
+- `APP_SECRET_KEY`: 32바이트 URL-safe base64 Fernet 키
+- `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `DB_ROOT_PASSWORD`: Compose MariaDB 설정
+- `WEB_PORT`: 호스트에 공개할 웹 포트
+- `POLL_INTERVAL_SECONDS`: POP 자동 수신 간격(최소 60초)
+- `DATABASE_URL`: 로컬에서 기본 SQLite 대신 다른 DB를 쓸 때 선택적으로 지정
+
+화면별 사용 방법은 [사용 방법](docs/usage.md), 구조와 후속 계획은
+[아키텍처](docs/architecture.md)를 참고하십시오.

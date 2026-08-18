@@ -1,5 +1,6 @@
-/config/config.php
-/var/mail/*
-!/var/mail/.gitkeep
+.env
+.venv/
+*.db
+__pycache__/
+.pytest_cache/
 *.log
-.phpunit.result.cache
