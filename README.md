@@ -77,6 +77,7 @@ make stop     # 서비스 종료; DB 데이터는 보존
 
 - `APP_SECRET_KEY`: 32바이트 URL-safe base64 Fernet 키
 - `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `DB_ROOT_PASSWORD`: Compose MariaDB 설정
+- `DB_MAX_ALLOWED_PACKET`: 큰 메일 저장을 위한 MariaDB 패킷 한도(기본 `64M`)
 - `WEB_PORT`: 호스트에 공개할 웹 포트
 - `POLL_INTERVAL_SECONDS`: POP 자동 수신 간격(최소 60초)
 - `DATABASE_URL`: 로컬에서 기본 SQLite 대신 다른 DB를 쓸 때 선택적으로 지정

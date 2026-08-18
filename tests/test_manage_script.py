@@ -6,6 +6,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import manage  # noqa: E402
 
 
+def test_compose_allows_database_packets_larger_than_pop_message_limit():
+    root = Path(__file__).resolve().parents[1]
+    compose = (root / "compose.yaml").read_text()
+
+    assert '--max-allowed-packet=${DB_MAX_ALLOWED_PACKET:-64M}' in compose
+
+
 def test_setup_prepares_environment_without_docker(tmp_path):
     env_file = tmp_path / ".env"
     with patch.object(manage, "ensure_env", return_value=env_file) as ensure:
