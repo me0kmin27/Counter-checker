@@ -7,6 +7,7 @@
 <a href="/" class="{% if request.url.path == '/' %}active{% endif %}"><span class="nav-icon" aria-hidden="true">⌂</span>대시보드</a>
 <a href="/mail" class="{% if request.url.path.startswith('/mail') %}active{% endif %}"><span class="nav-icon" aria-hidden="true">✉</span>받은 메일</a>
 <a href="/counters" class="{% if request.url.path.startswith('/counters') %}active{% endif %}"><span class="nav-icon" aria-hidden="true">▥</span>카운터 현황</a>
+<a href="/customers" class="{% if request.url.path.startswith('/customers') %}active{% endif %}"><span class="nav-icon" aria-hidden="true">▤</span>거래처 관리</a>
 {% if request.state.user.role in ('operator', 'admin') %}
 <a href="/settings" class="{% if request.url.path == '/settings' %}active{% endif %}"><span class="nav-icon" aria-hidden="true">⚙</span>POP 설정</a>
 {% endif %}

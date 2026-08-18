@@ -261,6 +261,52 @@ def test_counter_domain_is_visible_on_website(client):
     assert client.get("/counters/9999").status_code == 404
 
 
+def test_customer_registration_creates_company_site_and_device(client):
+    response = client.post("/customers", data={
+        "company_name": "한빛상사", "model_name": "Bizhub C300i",
+        "serial_number": "SN 12-34", "phone": "02-1234-5678",
+        "email": "counter@hanbit.example",
+    }, follow_redirects=False)
+
+    assert response.status_code == 303
+    with SessionLocal() as db:
+        organization = db.query(Organization).one()
+        assert (organization.name, organization.phone, organization.email) == (
+            "한빛상사", "02-1234-5678", "counter@hanbit.example"
+        )
+        assert organization.sites[0].devices[0].normalized_serial == "SN12-34"
+    page = client.get("/customers")
+    assert all(value in page.text for value in ("한빛상사", "Bizhub C300i", "SN 12-34"))
+
+
+def test_counter_workspace_filters_by_company_and_period(client):
+    with SessionLocal() as db:
+        organization = Organization(name="기간조회 업체")
+        site = Site(name="기본", organization=organization)
+        device = Device(site=site, brand="Acme", model="M1", serial_number="PERIOD-1",
+                        normalized_serial="PERIOD-1")
+        account = PopAccount(name="test", host="localhost", port=110, username="u",
+                             encrypted_password=encrypt_password("p"), use_ssl=False)
+        db.add_all([organization, account])
+        db.flush()
+        mime = MimeMessage()
+        mime.set_content("counter")
+        assert store_message(db, account, mime.as_bytes())
+        run = ExtractionRun(email_id=db.query(EmailMessage).one().id, adapter="test",
+                            adapter_version="1")
+        db.add(CounterReading(run=run, device=device, counter_type="total", value=9876,
+                              captured_at=db.query(EmailMessage).one().received_at,
+                              confidence=1, raw_text="9876"))
+        db.commit()
+        organization_id = organization.id
+
+    page = client.get(f"/counters?organization_id={organization_id}&months=6")
+    assert page.status_code == 200
+    assert "기간조회 업체" in page.text and "9,876" in page.text
+    assert 'value="6" selected' in page.text
+    assert client.get("/counters?months=5").status_code == 422
+
+
 def test_update_pop_account_keeps_password_when_blank(client):
     client.post("/settings", data={
         "name": "before", "host": "pop.example.com", "port": "995",

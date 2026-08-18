@@ -1,4 +1,5 @@
 import asyncio
+import calendar
 import os
 from datetime import datetime, time, timezone
 from contextlib import asynccontextmanager, suppress
@@ -67,6 +68,15 @@ def _filter_values(mode: str, sender: str, recipient: str, subject: str, keyword
             "filter_date_from": start, "filter_date_to": end}
 
 
+def _months_ago(value: datetime, months: int) -> datetime:
+    """Return the same point in time a number of calendar months earlier."""
+    month_index = value.year * 12 + value.month - 1 - months
+    year, month_zero = divmod(month_index, 12)
+    month = month_zero + 1
+    day = min(value.day, calendar.monthrange(year, month)[1])
+    return value.replace(year=year, month=month, day=day)
+
+
 async def poll_loop():
     interval = max(60, int(os.getenv("POLL_INTERVAL_SECONDS", "300")))
     while True:
@@ -120,7 +130,7 @@ async def authentication(request: Request, call_next):
     required = 2 if request.url.path.startswith("/users") else (
         1 if request.url.path.startswith("/settings") else 0
     )
-    if request.method == "POST" and request.url.path.startswith(("/mail", "/counters")):
+    if request.method == "POST" and request.url.path.startswith(("/mail", "/counters", "/customers")):
         required = max(required, 1)
     if user and ROLE_LEVEL.get(user.role, -1) < required:
         return PlainTextResponse("이 작업을 수행할 권한이 없습니다.", status_code=403)
@@ -312,7 +322,8 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
 
 
 @app.get("/counters", response_class=HTMLResponse)
-def counter_workspace(request: Request, db: Session = Depends(get_db)):
+def counter_workspace(request: Request, organization_id: str = "", months: int = 3,
+                      db: Session = Depends(get_db)):
     """Expose the counter-analysis domain that is already persisted by the application."""
     counts = {
         "organizations": db.scalar(select(func.count()).select_from(Organization)) or 0,
@@ -324,12 +335,21 @@ def counter_workspace(request: Request, db: Session = Depends(get_db)):
         select(func.count()).select_from(CounterReading)
         .where(CounterReading.status == "needs_review")
     ) or 0
+    if months not in {3, 6, 12}:
+        raise HTTPException(422, "조회 기간은 최근 3개월, 6개월 또는 12개월이어야 합니다.")
+    selected_organization_id = int(organization_id) if organization_id.isdigit() else None
+    cutoff = _months_ago(datetime.now(timezone.utc), months)
+    reading_query = select(CounterReading).join(CounterReading.device).join(Device.site).where(
+        CounterReading.captured_at >= cutoff
+    )
+    if selected_organization_id is not None:
+        reading_query = reading_query.where(Site.organization_id == selected_organization_id)
     readings = db.scalars(
-        select(CounterReading).options(
+        reading_query.options(
             selectinload(CounterReading.device).selectinload(Device.site)
             .selectinload(Site.organization),
             selectinload(CounterReading.run),
-        ).order_by(CounterReading.captured_at.desc()).limit(30)
+        ).order_by(CounterReading.captured_at.desc())
     ).all()
     devices = db.scalars(
         select(Device).options(
@@ -343,10 +363,55 @@ def counter_workspace(request: Request, db: Session = Depends(get_db)):
     events = db.scalars(
         select(ProcessingEvent).order_by(ProcessingEvent.created_at.desc()).limit(10)
     ).all()
+    organizations = db.scalars(select(Organization).order_by(Organization.name)).all()
+    monthly = {}
+    for reading in readings:
+        key = (reading.captured_at.strftime("%Y-%m"), reading.device.site.organization.name)
+        summary = monthly.setdefault(key, {"month": key[0], "organization": key[1],
+                                           "count": 0, "latest_value": 0})
+        summary["count"] += 1
+        summary["latest_value"] = max(summary["latest_value"], reading.value)
+    monthly_rows = sorted(monthly.values(), key=lambda row: (row["month"], row["organization"]),
+                          reverse=True)
     return templates.TemplateResponse(request, "counters.html", {
         "counts": counts, "pending": pending, "readings": readings,
-        "devices": devices, "runs": runs, "events": events,
+        "devices": devices, "runs": runs, "events": events, "organizations": organizations,
+        "organization_id": selected_organization_id, "months": months,
+        "monthly_rows": monthly_rows,
     })
+
+
+@app.get("/customers", response_class=HTMLResponse)
+def customers(request: Request, db: Session = Depends(get_db)):
+    organizations = db.scalars(
+        select(Organization).options(
+            selectinload(Organization.sites).selectinload(Site.devices)
+        ).order_by(Organization.name)
+    ).all()
+    return templates.TemplateResponse(request, "customers.html", {
+        "organizations": organizations, "notice": request.query_params.get("notice")
+    })
+
+
+@app.post("/customers")
+def add_customer(company_name: str = Form(...), model_name: str = Form(...),
+                 serial_number: str = Form(...), phone: str = Form(...), email: str = Form(...),
+                 db: Session = Depends(get_db)):
+    company_name, model_name = company_name.strip(), model_name.strip()
+    serial_number, phone, email = serial_number.strip(), phone.strip(), email.strip()
+    if not all((company_name, model_name, serial_number, phone, email)) or "@" not in email:
+        raise HTTPException(422, "거래처 정보를 올바르게 입력하세요.")
+    normalized_serial = "".join(serial_number.upper().split())
+    if db.scalar(select(Device.id).where(Device.normalized_serial == normalized_serial)):
+        raise HTTPException(422, "이미 등록된 시리얼넘버입니다.")
+    organization = Organization(name=company_name, phone=phone, email=email)
+    site = Site(name="기본 사업장")
+    site.devices.append(Device(brand="미지정", model=model_name, serial_number=serial_number,
+                               normalized_serial=normalized_serial))
+    organization.sites.append(site)
+    db.add(organization)
+    db.commit()
+    return RedirectResponse("/customers?notice=" + quote("거래처를 등록했습니다."), 303)
 
 
 @app.get("/counters/{reading_id}", response_class=HTMLResponse)
