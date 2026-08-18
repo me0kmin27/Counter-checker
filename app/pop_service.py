@@ -14,6 +14,7 @@ from sqlalchemy.exc import DataError, IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
 from .models import Attachment, EmailMessage, PopAccount
+from .counter_ingestion import process_counter_message
 from .security import decrypt_password
 
 
@@ -234,8 +235,10 @@ def store_message(db: Session, account: PopAccount, raw: bytes) -> bool:
             ))
             if exists:
                 return False
-            db.add(build_message())
+            message = build_message()
+            db.add(message)
             db.commit()
+            process_counter_message(db, message)
             return True
         except IntegrityError:
             db.rollback()
