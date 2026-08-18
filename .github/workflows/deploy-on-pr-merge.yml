@@ -11,14 +11,16 @@ permissions:
   contents: read
 
 concurrency:
-  group: keimirror-production-deploy
+  group: 
+Counter-checker-production-deploy
   cancel-in-progress: true
 
 jobs:
   deploy:
     if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
-    environment: keimirror
+    environment: 
+Counter-checker
 
     steps:
       - name: Checkout merged code
