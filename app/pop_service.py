@@ -1,3 +1,4 @@
+import errno
 import hashlib
 import poplib
 import socket
@@ -27,6 +28,12 @@ def describe_connection_error(exc: Exception) -> str:
         detail = "POP 서버 연결 시간이 초과되었습니다. 주소, 포트, 방화벽을 확인하세요."
     elif isinstance(exc, ConnectionRefusedError):
         detail = "POP 서버가 연결을 거부했습니다. 주소와 포트를 확인하세요."
+    elif isinstance(exc, OSError) and exc.errno in (errno.ENETUNREACH, errno.EHOSTUNREACH):
+        detail = (
+            "POP 서버로 가는 네트워크 경로가 없습니다. "
+            "Docker 컨테이너 또는 실행 서버의 외부 인터넷 연결과 방화벽을 확인하고, "
+            "IPv6를 사용할 수 없는 환경이면 IPv4를 지원하는 POP 서버 주소를 사용하세요."
+        )
     elif isinstance(exc, ssl.SSLCertVerificationError):
         detail = "POP 서버 TLS 인증서를 확인할 수 없습니다. 인증서와 서버 시간을 확인하세요."
     elif isinstance(exc, ssl.SSLError):
