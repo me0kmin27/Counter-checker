@@ -5,7 +5,7 @@ import re
 import shutil
 import subprocess
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -208,23 +208,37 @@ def _custom_rule(message: EmailMessage, rules: list[BotRule]) -> ParsedCounters 
     subject, sender = message.subject or "", message.sender or ""
 
     def source_for(source_type: str, filename_keyword: str | None = None) -> str:
-        def selected(item) -> bool:
-            return not filename_keyword or filename_keyword.casefold() in item.filename.casefold()
+        def matching_attachments(supported) -> list:
+            candidates = [item for item in message.attachments if supported(item)]
+            if not filename_keyword:
+                return candidates
+            selected = [
+                item for item in candidates
+                if filename_keyword.casefold() in item.filename.casefold()
+            ]
+            # The rule builder historically saved the sample's complete
+            # filename.  Kyocera commonly includes the device serial in that
+            # filename, so a rule made from 11Y... rejects WDM...'s otherwise
+            # identical report.  When the message has exactly one attachment
+            # of the requested format there is no ambiguity: use that report.
+            return selected or (candidates if len(candidates) == 1 else [])
 
         if source_type == "rtf":
             return "\n".join(
-                _rtf_to_text(item.content) for item in message.attachments
-                if selected(item) and (
+                _rtf_to_text(item.content) for item in matching_attachments(
+                    lambda item: (
                     item.filename.lower().endswith(".rtf")
                     or item.mime_type.casefold().split(";", 1)[0] in {"application/rtf", "text/rtf"}
+                    )
                 )
             )
         if source_type == "html_attachment":
             return "\n".join(
-                _html_to_text(item.content) for item in message.attachments
-                if selected(item) and (
+                _html_to_text(item.content) for item in matching_attachments(
+                    lambda item: (
                     item.mime_type.casefold().split(";", 1)[0] in {"text/html", "application/xhtml+xml"}
                     or item.filename.casefold().endswith((".htm", ".html"))
+                    )
                 )
             )
         if source_type == "ocr":
@@ -251,6 +265,17 @@ def _custom_rule(message: EmailMessage, rules: list[BotRule]) -> ParsedCounters 
             serial_match = re.search(
                 rule.serial_pattern, serial_source, re.IGNORECASE | re.MULTILINE,
             )
+            serial_number = serial_match.group(1).strip() if serial_match else None
+            # Rules saved from an older sample can be accidentally tied to that
+            # sample's value (for example, a pattern that accepts 11Y... but not
+            # WDM...).  A failed custom target must not hide a standard labelled
+            # serial that the built-in parser can read from the very same source.
+            # Keep an explicit custom match authoritative, and only use this as a
+            # compatibility fallback for common Serial Number/S/N labels.
+            if not serial_number:
+                serial_number = _extract(
+                    serial_source, f"custom-{rule.brand}-serial-fallback", 0.95,
+                ).serial_number
             counters = {}
             for counter_type, pattern in (("black", rule.black_pattern), ("color", rule.color_pattern), ("total", rule.total_pattern)):
                 match = re.search(
@@ -260,9 +285,11 @@ def _custom_rule(message: EmailMessage, rules: list[BotRule]) -> ParsedCounters 
                     counters[counter_type] = _number(match.group(1))
         except (re.error, IndexError, ValueError):
             continue
-        if serial_match or counters:
+        if serial_number or counters:
             evidence = f"{serial_source}\n{counter_source}"[:4000]
-            return ParsedCounters(f"custom-{rule.brand}", serial_match.group(1).strip() if serial_match else None, counters, evidence, 0.95)
+            return ParsedCounters(
+                f"custom-{rule.brand}", serial_number, counters, evidence, 0.95,
+            )
     return None
 
 
@@ -309,6 +336,30 @@ def process_counter_message(db: Session, message: EmailMessage) -> ExtractionRun
     )
     rules = db.scalars(select(BotRule).where(BotRule.enabled.is_(True)).order_by(BotRule.id)).all()
     parsed = parse_counter_message(message, rules)
+    # Last-resort identity recovery is based on the registered fleet, not on a
+    # vendor prefix.  This makes digit-leading (11Y...) and letter-leading
+    # (WDM...) serials equivalent even when a device changes the surrounding
+    # mail label or a legacy custom rule misses it.  Only an unambiguous serial
+    # present in the decoded message is accepted.
+    devices = db.scalars(select(Device)).all() if not parsed.serial_number else []
+    if devices:
+        identity_source = "\n".join([
+            message.subject or "", message.text_body or "", message.html_body or "",
+            _html_attachments(message),
+            *(
+                _rtf_to_text(item.content) for item in message.attachments
+                if item.filename.casefold().endswith(".rtf")
+                or item.mime_type.casefold().split(";", 1)[0] in {"application/rtf", "text/rtf"}
+            ),
+        ])
+        normalized_source = normalize_serial(identity_source)
+        matched_devices = [
+            item for item in devices
+            if len(normalize_serial(item.serial_number)) >= 4
+            and normalize_serial(item.serial_number) in normalized_source
+        ]
+        if len(matched_devices) == 1:
+            parsed = replace(parsed, serial_number=matched_devices[0].serial_number)
     # Ordinary inbox traffic must not pollute the extraction queue. A vendor
     # notification is actionable only when it contains at least one key field.
     if not parsed.serial_number and not parsed.counters:
@@ -321,7 +372,7 @@ def process_counter_message(db: Session, message: EmailMessage) -> ExtractionRun
     db.add(run)
     db.flush()
     serial_key = normalize_serial(parsed.serial_number or "")
-    devices = db.scalars(select(Device)).all() if serial_key else []
+    devices = devices or (db.scalars(select(Device)).all() if serial_key else [])
     device = next((item for item in devices if normalize_serial(item.serial_number) == serial_key), None)
     if not parsed.serial_number:
         run.status, run.error_code = "needs_review", "serial_missing"
