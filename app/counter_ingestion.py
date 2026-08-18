@@ -57,6 +57,35 @@ def _rtf_to_text(content: bytes) -> str:
     return re.sub(r"[{}]", "", source)
 
 
+def _html_to_text(content: bytes) -> str:
+    """Decode an attached HTM report and expose its rendered text to parsers."""
+    charset_match = re.search(
+        br"charset\s*=\s*[\"']?([a-zA-Z0-9._-]+)", content[:4096], re.IGNORECASE,
+    )
+    candidates = [charset_match.group(1).decode("ascii", "ignore")] if charset_match else []
+    candidates.extend(["utf-8", "cp949", "euc-kr", "latin-1"])
+    source = ""
+    for encoding in dict.fromkeys(candidates):
+        try:
+            source = content.decode(encoding)
+            break
+        except (LookupError, UnicodeDecodeError):
+            continue
+    source = re.sub(r"<(script|style)\b[^>]*>.*?</\1>", " ", source,
+                    flags=re.IGNORECASE | re.DOTALL)
+    source = re.sub(r"<(?:br|/p|/div|/tr|/li|/h[1-6])\b[^>]*>", "\n", source,
+                    flags=re.IGNORECASE)
+    return html.unescape(re.sub(r"<[^>]+>", " ", source))
+
+
+def _html_attachments(message: EmailMessage) -> str:
+    return "\n".join(
+        _html_to_text(item.content) for item in message.attachments
+        if item.mime_type.casefold() in {"text/html", "application/xhtml+xml"}
+        or item.filename.casefold().endswith((".htm", ".html"))
+    )
+
+
 def _ocr_images(message: EmailMessage) -> str:
     executable = shutil.which("tesseract")
     if not executable:
@@ -168,6 +197,8 @@ def _custom_rule(message: EmailMessage, rules: list[BotRule]) -> ParsedCounters 
             continue
         if rule.source_type == "rtf":
             source = "\n".join(_rtf_to_text(item.content) for item in message.attachments if item.filename.lower().endswith(".rtf") or item.mime_type in {"application/rtf", "text/rtf"})
+        elif rule.source_type == "html_attachment":
+            source = _html_attachments(message)
         elif rule.source_type == "ocr":
             source = _ocr_images(message)
         else:
@@ -199,7 +230,7 @@ def parse_counter_message(message: EmailMessage, rules: list[BotRule] | None = N
             has_rtf = True
             attachment_text.append(_rtf_to_text(item.content))
 
-    subject_and_body = f"{message.subject}\n{message.text_body}\n{html.unescape(re.sub('<[^>]+>', ' ', message.html_body))}"
+    subject_and_body = f"{message.subject}\n{message.text_body}\n{html.unescape(re.sub('<[^>]+>', ' ', message.html_body))}\n{_html_attachments(message)}"
     probe = subject_and_body.casefold()
     if has_rtf or "samsung" in probe or "삼성" in probe:
         return _extract("\n".join([subject_and_body, *attachment_text]), "samsung-rtf", 0.98)

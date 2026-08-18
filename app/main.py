@@ -681,7 +681,7 @@ def add_bot_rule(brand: str = Form(...), source_type: str = Form(...),
                  black_pattern: str = Form(""), color_pattern: str = Form(""),
                  total_pattern: str = Form(""), enabled: bool = Form(False),
                  db: Session = Depends(get_db)):
-    if source_type not in {"email", "ocr", "rtf"} or not brand.strip() or not serial_pattern.strip():
+    if source_type not in {"email", "html_attachment", "ocr", "rtf"} or not brand.strip() or not serial_pattern.strip():
         raise HTTPException(422, "브랜드, 원본 유형, 시리얼 타겟을 확인하세요.")
     try:
         for pattern in (serial_pattern, black_pattern, color_pattern, total_pattern):
