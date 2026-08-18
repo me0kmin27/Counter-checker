@@ -1,18 +1,28 @@
 import asyncio
 import os
 from contextlib import asynccontextmanager, suppress
+from urllib.parse import quote
 
-from fastapi import Depends, FastAPI, Form, HTTPException, Request
+from fastapi import Depends, FastAPI, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from .database import Base, SessionLocal, engine, get_db
 from .models import Attachment, EmailMessage, PopAccount
 from .pop_service import fetch_account
 from .security import encrypt_password
+
+
+def _validate_account(name: str, host: str, port: int, username: str) -> tuple[str, str, str]:
+    name, host, username = name.strip(), host.strip(), username.strip()
+    if not name or not host or not username or not 1 <= port <= 65535:
+        raise HTTPException(422, "POP 계정 정보를 올바르게 입력하세요.")
+    if any(character.isspace() for character in host):
+        raise HTTPException(422, "POP 서버 주소에는 공백을 사용할 수 없습니다.")
+    return name, host, username
 
 
 async def poll_loop():
@@ -73,14 +83,36 @@ def add_account(
     use_ssl: bool = Form(False), enabled: bool = Form(False),
     delete_after_receive: bool = Form(False), db: Session = Depends(get_db),
 ):
+    name, host, username = _validate_account(name, host, port, username)
     account = PopAccount(
-        name=name.strip(), host=host.strip(), port=port, username=username.strip(),
+        name=name, host=host, port=port, username=username,
         encrypted_password=encrypt_password(password), use_ssl=use_ssl, enabled=enabled,
         delete_after_receive=delete_after_receive,
     )
     db.add(account)
     db.commit()
     return RedirectResponse("/settings", status_code=303)
+
+
+@app.post("/settings/{account_id}")
+def update_account(
+    account_id: int, name: str = Form(...), host: str = Form(...), port: int = Form(...),
+    username: str = Form(...), password: str = Form(""), use_ssl: bool = Form(False),
+    enabled: bool = Form(False), delete_after_receive: bool = Form(False),
+    db: Session = Depends(get_db),
+):
+    account = db.get(PopAccount, account_id)
+    if not account:
+        raise HTTPException(404)
+    name, host, username = _validate_account(name, host, port, username)
+    account.name, account.host, account.port, account.username = name, host, port, username
+    account.use_ssl, account.enabled = use_ssl, enabled
+    account.delete_after_receive = delete_after_receive
+    if password:
+        account.encrypted_password = encrypt_password(password)
+    account.last_error = None
+    db.commit()
+    return RedirectResponse("/settings?notice=POP%20%EC%84%A4%EC%A0%95%EC%9D%B4%20%EC%A0%80%EC%9E%A5%EB%90%98%EC%97%88%EC%8A%B5%EB%8B%88%EB%8B%A4", status_code=303)
 
 
 @app.post("/settings/{account_id}/delete")
@@ -109,16 +141,33 @@ def fetch(account_id: int, db: Session = Depends(get_db)):
 
 
 @app.get("/mail", response_class=HTMLResponse)
-def mail_list(request: Request, page: int = 1, db: Session = Depends(get_db)):
+def mail_list(request: Request, page: int = Query(1, ge=1), q: str = "", account_id: str = "",
+              db: Session = Depends(get_db)):
     page = max(1, page)
-    total = db.scalar(select(func.count()).select_from(EmailMessage)) or 0
+    query = select(EmailMessage)
+    count_query = select(func.count()).select_from(EmailMessage)
+    conditions = []
+    q = q.strip()
+    if q:
+        pattern = f"%{q}%"
+        conditions.append(or_(EmailMessage.subject.ilike(pattern), EmailMessage.sender.ilike(pattern),
+                              EmailMessage.text_body.ilike(pattern)))
+    selected_account_id = int(account_id) if account_id.isdigit() else None
+    if selected_account_id is not None:
+        conditions.append(EmailMessage.account_id == selected_account_id)
+    if conditions:
+        query = query.where(*conditions)
+        count_query = count_query.where(*conditions)
+    total = db.scalar(count_query) or 0
     messages = db.scalars(
-        select(EmailMessage).options(selectinload(EmailMessage.account))
+        query.options(selectinload(EmailMessage.account))
         .order_by(EmailMessage.received_at.desc()).offset((page - 1) * 20).limit(20)
     ).all()
     return templates.TemplateResponse(request, "mail_list.html", {
         "messages": messages, "page": page, "pages": max(1, (total + 19) // 20),
-        "notice": request.query_params.get("notice"),
+        "notice": request.query_params.get("notice"), "q": q,
+        "account_id": selected_account_id,
+        "accounts": db.scalars(select(PopAccount).order_by(PopAccount.name)).all(),
     })
 
 
@@ -132,13 +181,34 @@ def mail_detail(message_id: int, request: Request, db: Session = Depends(get_db)
     return templates.TemplateResponse(request, "mail_detail.html", {"message": message})
 
 
+@app.get("/mail/{message_id}/raw")
+def raw_message(message_id: int, db: Session = Depends(get_db)):
+    message = db.get(EmailMessage, message_id)
+    if not message:
+        raise HTTPException(404)
+    return Response(message.raw_message, media_type="message/rfc822", headers={
+        "Content-Disposition": f'attachment; filename="message-{message.id}.eml"',
+        "X-Content-Type-Options": "nosniff",
+    })
+
+
+@app.post("/mail/{message_id}/delete")
+def delete_message(message_id: int, db: Session = Depends(get_db)):
+    message = db.get(EmailMessage, message_id)
+    if not message:
+        raise HTTPException(404)
+    db.delete(message)
+    db.commit()
+    return RedirectResponse("/mail?notice=%EB%A9%94%EC%9D%BC%EC%9D%84%20%EC%82%AD%EC%A0%9C%ED%96%88%EC%8A%B5%EB%8B%88%EB%8B%A4", status_code=303)
+
+
 @app.get("/attachments/{attachment_id}")
 def attachment(attachment_id: int, db: Session = Depends(get_db)):
     item = db.get(Attachment, attachment_id)
     if not item:
         raise HTTPException(404)
-    safe_name = item.filename.replace('"', "")
+    safe_name = item.filename.replace('"', "").replace("\r", "").replace("\n", "")
     return Response(item.content, media_type=item.mime_type, headers={
-        "Content-Disposition": f'attachment; filename="{safe_name}"',
+        "Content-Disposition": f'attachment; filename="attachment"; filename*=UTF-8\'\'{quote(safe_name)}',
         "X-Content-Type-Options": "nosniff",
     })
