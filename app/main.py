@@ -63,11 +63,16 @@ def health():
 @app.get("/", response_class=HTMLResponse)
 def dashboard(request: Request, db: Session = Depends(get_db)):
     accounts = db.scalar(select(func.count()).select_from(PopAccount)) or 0
+    active_accounts = db.scalar(
+        select(func.count()).select_from(PopAccount).where(PopAccount.enabled.is_(True))
+    ) or 0
     messages = db.scalar(select(func.count()).select_from(EmailMessage)) or 0
+    attachments = db.scalar(select(func.count()).select_from(Attachment)) or 0
     latest = db.scalars(select(EmailMessage).order_by(EmailMessage.received_at.desc()).limit(5)).all()
     errors = db.scalar(select(func.count()).select_from(PopAccount).where(PopAccount.last_error.is_not(None))) or 0
     return templates.TemplateResponse(request, "dashboard.html", {
-        "accounts": accounts, "messages": messages, "latest": latest, "errors": errors,
+        "accounts": accounts, "active_accounts": active_accounts, "messages": messages,
+        "attachments": attachments, "latest": latest, "errors": errors,
     })
 
 
