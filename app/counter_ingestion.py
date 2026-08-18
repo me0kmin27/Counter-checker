@@ -204,15 +204,26 @@ def _extract(source: str, adapter: str, confidence: float) -> ParsedCounters:
 def _custom_rule(message: EmailMessage, rules: list[BotRule]) -> ParsedCounters | None:
     subject, sender = message.subject or "", message.sender or ""
 
-    def source_for(source_type: str) -> str:
+    def source_for(source_type: str, filename_keyword: str | None = None) -> str:
+        def selected(item) -> bool:
+            return not filename_keyword or filename_keyword.casefold() in item.filename.casefold()
+
         if source_type == "rtf":
             return "\n".join(
                 _rtf_to_text(item.content) for item in message.attachments
-                if item.filename.lower().endswith(".rtf")
-                or item.mime_type in {"application/rtf", "text/rtf"}
+                if selected(item) and (
+                    item.filename.lower().endswith(".rtf")
+                    or item.mime_type.casefold().split(";", 1)[0] in {"application/rtf", "text/rtf"}
+                )
             )
         if source_type == "html_attachment":
-            return _html_attachments(message)
+            return "\n".join(
+                _html_to_text(item.content) for item in message.attachments
+                if selected(item) and (
+                    item.mime_type.casefold().split(";", 1)[0] in {"text/html", "application/xhtml+xml"}
+                    or item.filename.casefold().endswith((".htm", ".html"))
+                )
+            )
         if source_type == "ocr":
             return _ocr_images(message)
         return f"{subject}\n{message.text_body}\n{html.unescape(re.sub('<[^>]+>', ' ', message.html_body))}"
@@ -220,8 +231,17 @@ def _custom_rule(message: EmailMessage, rules: list[BotRule]) -> ParsedCounters 
     for rule in rules:
         if not rule.enabled or (rule.subject_keyword and rule.subject_keyword.casefold() not in subject.casefold()) or (rule.sender_keyword and rule.sender_keyword.casefold() not in sender.casefold()):
             continue
-        counter_source = source_for(rule.source_type)
-        serial_source = source_for(rule.serial_source_type or rule.source_type)
+        counter_filename = rule.attachment_filename if rule.source_type in {
+            "html_attachment", "rtf", "ocr",
+        } else None
+        serial_source_type = rule.serial_source_type or rule.source_type
+        serial_filename = None
+        if serial_source_type in {"html_attachment", "rtf", "ocr"}:
+            serial_filename = rule.serial_attachment_filename or counter_filename
+        counter_source = source_for(rule.source_type, counter_filename)
+        serial_source = source_for(
+            serial_source_type, serial_filename,
+        )
         if not counter_source and not serial_source:
             continue
         try:
