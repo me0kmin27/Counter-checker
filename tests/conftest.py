@@ -15,5 +15,9 @@ def client():
     Base.metadata.drop_all(engine)
     Base.metadata.create_all(engine)
     with TestClient(app) as test_client:
+        test_client.post("/setup", data={
+            "username": "admin", "display_name": "테스트 관리자",
+            "password": "test-password-123",
+        })
         yield test_client
     Base.metadata.drop_all(engine)

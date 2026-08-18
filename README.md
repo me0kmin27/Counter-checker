@@ -71,11 +71,20 @@ make stop     # 서비스 종료; DB 데이터는 보존
 전달합니다. 활성 POP 계정은 FastAPI 프로세스 내부 polling task가 기본 5분 간격으로 확인하므로
 별도의 PHP cron 작업은 필요하지 않습니다.
 
+첫 실행에는 `/setup`에서 최초 관리자 계정을 생성합니다. 무인 배포에서는
+`ADMIN_USERNAME`과 10자 이상의 `ADMIN_PASSWORD`를 함께 설정하면 최초 실행 시 관리자 계정이
+자동 생성됩니다. 로그인 세션 쿠키에는 `APP_SESSION_SECRET`(미지정 시 `APP_SECRET_KEY`)을 사용하며,
+TLS로 서비스할 때는 `SESSION_HTTPS_ONLY=true`를 설정해야 합니다. 관리자는 계정 관리에서 조회자,
+운영자, 관리자를 추가·변경·삭제할 수 있고 사용자는 마이페이지에서 비밀번호 및 TOTP를 관리합니다.
+
 ## 설정
 
 `.env.example`의 항목은 다음과 같습니다.
 
 - `APP_SECRET_KEY`: 32바이트 URL-safe base64 Fernet 키
+- `APP_SESSION_SECRET`: 로그인 세션 서명용 충분히 긴 임의 문자열(권장)
+- `ADMIN_USERNAME`, `ADMIN_PASSWORD`: 최초 관리자 자동 생성 정보(선택)
+- `SESSION_HTTPS_ONLY`: HTTPS 환경에서 세션 쿠키의 Secure 속성 활성화
 - `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `DB_ROOT_PASSWORD`: Compose MariaDB 설정
 - `DB_MAX_ALLOWED_PACKET`: 큰 메일 저장을 위한 MariaDB 패킷 한도(기본 `64M`)
 - `WEB_PORT`: 호스트에 공개할 웹 포트
