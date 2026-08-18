@@ -1,7 +1,7 @@
 import errno
 from email.message import EmailMessage as MimeMessage
 import socket
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 from app.database import SessionLocal
 from app.models import CounterReading, Device, EmailMessage, ExtractionRun, Organization, PopAccount, Site
@@ -126,6 +126,14 @@ def test_network_unreachable_error_explains_container_and_ipv4_checks():
     assert "Errno" not in error
 
 
+def test_timeout_error_does_not_assume_a_firewall_problem():
+    error = describe_connection_error(socket.timeout("timed out"))
+
+    assert "연결 또는 응답" in error
+    assert "POP 사용 허용 여부" in error
+    assert "방화벽" not in error
+
+
 def test_pop_socket_tries_ipv4_before_ipv6_and_falls_back():
     ipv4 = (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("192.0.2.1", 995))
     ipv6 = (socket.AF_INET6, socket.SOCK_STREAM, 6, "", ("2001:db8::1", 995, 0, 0))
@@ -142,6 +150,24 @@ def test_pop_socket_tries_ipv4_before_ipv6_and_falls_back():
     assert result is ipv6_socket
     ipv4_socket.connect.assert_called_once_with(ipv4[-1])
     ipv6_socket.connect.assert_called_once_with(ipv6[-1])
+    assert ipv4_socket.settimeout.call_args_list == [call(5)]
+    assert ipv6_socket.settimeout.call_args_list == [call(5), call(30)]
+
+
+def test_pop_socket_does_not_wait_full_timeout_before_trying_next_address():
+    first = (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("192.0.2.1", 995))
+    second = (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("192.0.2.2", 995))
+
+    with patch("app.pop_service.socket.getaddrinfo", side_effect=[[first, second], []]), \
+         patch("app.pop_service.socket.socket") as socket_factory:
+        first_socket, second_socket = socket_factory.side_effect = [MagicMock(), MagicMock()]
+        first_socket.connect.side_effect = socket.timeout("timed out")
+
+        result = _create_pop_socket("pop.example.com", 995, 30)
+
+    assert result is second_socket
+    first_socket.settimeout.assert_called_once_with(5)
+    assert second_socket.settimeout.call_args_list[-1].args == (30,)
 
 
 def test_mailbox_search_raw_download_and_delete(client):
