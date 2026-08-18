@@ -34,7 +34,6 @@
       counterSample.value = result.text;
       const attachmentType = file.name.toLowerCase().endsWith('.rtf') ? 'rtf' : 'html_attachment';
       document.querySelector('#source-type').value = attachmentType;
-      document.querySelector('#attachment-filename').value = file.name;
       status.textContent = `${result.filename} 내용을 읽었습니다. 아래에서 실제 값을 선택하세요.`;
     } catch (error) { status.textContent = error.message; }
   });

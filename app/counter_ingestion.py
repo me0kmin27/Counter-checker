@@ -208,23 +208,37 @@ def _custom_rule(message: EmailMessage, rules: list[BotRule]) -> ParsedCounters 
     subject, sender = message.subject or "", message.sender or ""
 
     def source_for(source_type: str, filename_keyword: str | None = None) -> str:
-        def selected(item) -> bool:
-            return not filename_keyword or filename_keyword.casefold() in item.filename.casefold()
+        def matching_attachments(supported) -> list:
+            candidates = [item for item in message.attachments if supported(item)]
+            if not filename_keyword:
+                return candidates
+            selected = [
+                item for item in candidates
+                if filename_keyword.casefold() in item.filename.casefold()
+            ]
+            # The rule builder historically saved the sample's complete
+            # filename.  Kyocera commonly includes the device serial in that
+            # filename, so a rule made from 11Y... rejects WDM...'s otherwise
+            # identical report.  When the message has exactly one attachment
+            # of the requested format there is no ambiguity: use that report.
+            return selected or (candidates if len(candidates) == 1 else [])
 
         if source_type == "rtf":
             return "\n".join(
-                _rtf_to_text(item.content) for item in message.attachments
-                if selected(item) and (
+                _rtf_to_text(item.content) for item in matching_attachments(
+                    lambda item: (
                     item.filename.lower().endswith(".rtf")
                     or item.mime_type.casefold().split(";", 1)[0] in {"application/rtf", "text/rtf"}
+                    )
                 )
             )
         if source_type == "html_attachment":
             return "\n".join(
-                _html_to_text(item.content) for item in message.attachments
-                if selected(item) and (
+                _html_to_text(item.content) for item in matching_attachments(
+                    lambda item: (
                     item.mime_type.casefold().split(";", 1)[0] in {"text/html", "application/xhtml+xml"}
                     or item.filename.casefold().endswith((".htm", ".html"))
+                    )
                 )
             )
         if source_type == "ocr":
