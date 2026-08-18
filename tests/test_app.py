@@ -345,6 +345,8 @@ def test_customer_registration_creates_company_site_and_device(client):
         "company_name": "한빛상사", "model_name": "Bizhub C300i",
         "serial_number": "SN 12-34", "phone": "02-1234-5678",
         "email": "counter@hanbit.example", "started_at": "2026-08-01",
+        "monthly_black_allowance": "1000", "monthly_color_allowance": "200",
+        "initial_black_counter": "123", "initial_color_counter": "45",
     }, follow_redirects=False)
 
     assert response.status_code == 303
@@ -355,6 +357,9 @@ def test_customer_registration_creates_company_site_and_device(client):
         )
         assert organization.sites[0].devices[0].normalized_serial == "SN12-34"
         assert organization.sites[0].devices[0].installed_at.strftime("%Y-%m-%d") == "2026-08-01"
+        assert (organization.monthly_black_allowance, organization.monthly_color_allowance) == (1000, 200)
+        assert (organization.sites[0].devices[0].initial_black_counter,
+                organization.sites[0].devices[0].initial_color_counter) == (123, 45)
     page = client.get("/customers")
     assert all(value in page.text for value in ("한빛상사", "Bizhub C300i", "SN 12-34"))
 
@@ -391,6 +396,38 @@ def test_customer_search_pagination_edit_and_delete(client):
     assert client.post(f"/customers/{target_id}/delete", follow_redirects=False).status_code == 303
     with SessionLocal() as db:
         assert db.get(Organization, target_id) is None
+
+
+def test_customer_device_replacement_preserves_counter_handover_history(client):
+    client.post("/customers", data={
+        "company_name": "교체 업체", "model_name": "Old MFP", "serial_number": "OLD-1",
+        "phone": "02-1111-1111", "email": "old@example.com", "started_at": "2026-01-01",
+        "monthly_black_allowance": "1500", "monthly_color_allowance": "300",
+        "initial_black_counter": "10", "initial_color_counter": "20",
+    })
+    with SessionLocal() as db:
+        organization_id = db.query(Organization.id).scalar()
+
+    response = client.post(f"/customers/{organization_id}/edit", data={
+        "company_name": "교체 업체", "model_name": "New MFP", "serial_number": "NEW-1",
+        "phone": "02-1111-1111", "email": "new@example.com", "started_at": "2026-08-18",
+        "monthly_black_allowance": "2000", "monthly_color_allowance": "400",
+        "initial_black_counter": "100", "initial_color_counter": "200",
+        "previous_final_black_counter": "9100", "previous_final_color_counter": "2200",
+    }, follow_redirects=False)
+
+    assert response.status_code == 303
+    with SessionLocal() as db:
+        organization = db.get(Organization, organization_id)
+        devices = sorted(organization.sites[0].devices, key=lambda item: item.id)
+        replacement = organization.sites[0].replacements[0]
+        assert devices[0].retired_at.strftime("%Y-%m-%d") == "2026-08-18"
+        assert (devices[1].serial_number, devices[1].initial_black_counter,
+                devices[1].initial_color_counter) == ("NEW-1", 100, 200)
+        assert (replacement.previous_final_black_counter,
+                replacement.previous_final_color_counter) == (9100, 2200)
+    page = client.get("/customers")
+    assert all(value in page.text for value in ("복합기 교체 이력", "OLD-1", "NEW-1", "9,100", "2,200"))
 
 
 def test_counter_workspace_filters_by_company_and_period(client):

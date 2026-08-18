@@ -136,6 +136,8 @@ class Organization(Base):
     email: Mapped[str | None] = mapped_column(String(320))
     external_code: Mapped[str | None] = mapped_column(String(100), unique=True)
     status: Mapped[str] = mapped_column(String(30), default="active")
+    monthly_black_allowance: Mapped[int] = mapped_column(BigInteger, default=0)
+    monthly_color_allowance: Mapped[int] = mapped_column(BigInteger, default=0)
     sites: Mapped[list["Site"]] = relationship(back_populates="organization", cascade="all, delete-orphan")
 
 
@@ -148,6 +150,9 @@ class Site(Base):
     timezone: Mapped[str] = mapped_column(String(64), default="Asia/Seoul")
     organization: Mapped[Organization] = relationship(back_populates="sites")
     devices: Mapped[list["Device"]] = relationship(back_populates="site", cascade="all, delete-orphan")
+    replacements: Mapped[list["DeviceReplacement"]] = relationship(
+        back_populates="site", cascade="all, delete-orphan", order_by="DeviceReplacement.replaced_at"
+    )
 
 
 class Device(Base):
@@ -162,8 +167,28 @@ class Device(Base):
     normalized_serial: Mapped[str] = mapped_column(String(150))
     installed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     retired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    initial_black_counter: Mapped[int] = mapped_column(BigInteger, default=0)
+    initial_color_counter: Mapped[int] = mapped_column(BigInteger, default=0)
     site: Mapped[Site] = relationship(back_populates="devices")
     readings: Mapped[list["CounterReading"]] = relationship(back_populates="device")
+
+
+class DeviceReplacement(Base):
+    """Immutable hand-over record between two devices at a customer site."""
+    __tablename__ = "device_replacements"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    site_id: Mapped[int] = mapped_column(ForeignKey("sites.id"), index=True)
+    previous_device_id: Mapped[int] = mapped_column(ForeignKey("devices.id"))
+    new_device_id: Mapped[int] = mapped_column(ForeignKey("devices.id"))
+    replaced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    previous_final_black_counter: Mapped[int] = mapped_column(BigInteger, default=0)
+    previous_final_color_counter: Mapped[int] = mapped_column(BigInteger, default=0)
+    new_initial_black_counter: Mapped[int] = mapped_column(BigInteger, default=0)
+    new_initial_color_counter: Mapped[int] = mapped_column(BigInteger, default=0)
+    site: Mapped[Site] = relationship(back_populates="replacements")
+    previous_device: Mapped[Device] = relationship(foreign_keys=[previous_device_id])
+    new_device: Mapped[Device] = relationship(foreign_keys=[new_device_id])
 
 
 class ExtractionRun(Base):
