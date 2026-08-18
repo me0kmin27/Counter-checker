@@ -676,12 +676,14 @@ def bot_settings(request: Request, db: Session = Depends(get_db)):
 
 @app.post("/bot-settings")
 def add_bot_rule(brand: str = Form(...), source_type: str = Form(...),
+                 serial_source_type: str = Form("email"),
                  subject_keyword: str = Form(""), sender_keyword: str = Form(""),
                  sample_format: str = Form(""), serial_pattern: str = Form(...),
                  black_pattern: str = Form(""), color_pattern: str = Form(""),
                  total_pattern: str = Form(""), enabled: bool = Form(False),
                  db: Session = Depends(get_db)):
-    if source_type not in {"email", "html_attachment", "ocr", "rtf"} or not brand.strip() or not serial_pattern.strip():
+    source_types = {"email", "html_attachment", "ocr", "rtf"}
+    if source_type not in source_types or serial_source_type not in source_types or not brand.strip() or not serial_pattern.strip():
         raise HTTPException(422, "브랜드, 원본 유형, 시리얼 타겟을 확인하세요.")
     try:
         for pattern in (serial_pattern, black_pattern, color_pattern, total_pattern):
@@ -690,6 +692,7 @@ def add_bot_rule(brand: str = Form(...), source_type: str = Form(...),
     except (re.error, ValueError):
         raise HTTPException(422, "각 타겟 정규식에는 추출할 값을 감싸는 그룹 ( )이 필요합니다.")
     db.add(BotRule(brand=brand.strip(), source_type=source_type,
+                   serial_source_type=serial_source_type,
                    subject_keyword=subject_keyword.strip() or None,
                    sender_keyword=sender_keyword.strip() or None, sample_format=sample_format,
                    serial_pattern=serial_pattern.strip(), black_pattern=black_pattern.strip() or None,

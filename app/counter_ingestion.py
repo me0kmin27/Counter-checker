@@ -203,30 +203,43 @@ def _extract(source: str, adapter: str, confidence: float) -> ParsedCounters:
 
 def _custom_rule(message: EmailMessage, rules: list[BotRule]) -> ParsedCounters | None:
     subject, sender = message.subject or "", message.sender or ""
+
+    def source_for(source_type: str) -> str:
+        if source_type == "rtf":
+            return "\n".join(
+                _rtf_to_text(item.content) for item in message.attachments
+                if item.filename.lower().endswith(".rtf")
+                or item.mime_type in {"application/rtf", "text/rtf"}
+            )
+        if source_type == "html_attachment":
+            return _html_attachments(message)
+        if source_type == "ocr":
+            return _ocr_images(message)
+        return f"{subject}\n{message.text_body}\n{html.unescape(re.sub('<[^>]+>', ' ', message.html_body))}"
+
     for rule in rules:
         if not rule.enabled or (rule.subject_keyword and rule.subject_keyword.casefold() not in subject.casefold()) or (rule.sender_keyword and rule.sender_keyword.casefold() not in sender.casefold()):
             continue
-        if rule.source_type == "rtf":
-            source = "\n".join(_rtf_to_text(item.content) for item in message.attachments if item.filename.lower().endswith(".rtf") or item.mime_type in {"application/rtf", "text/rtf"})
-        elif rule.source_type == "html_attachment":
-            source = _html_attachments(message)
-        elif rule.source_type == "ocr":
-            source = _ocr_images(message)
-        else:
-            source = f"{subject}\n{message.text_body}\n{html.unescape(re.sub('<[^>]+>', ' ', message.html_body))}"
-        if not source:
+        counter_source = source_for(rule.source_type)
+        serial_source = source_for(rule.serial_source_type or rule.source_type)
+        if not counter_source and not serial_source:
             continue
         try:
-            serial_match = re.search(rule.serial_pattern, source, re.IGNORECASE | re.MULTILINE)
+            serial_match = re.search(
+                rule.serial_pattern, serial_source, re.IGNORECASE | re.MULTILINE,
+            )
             counters = {}
             for counter_type, pattern in (("black", rule.black_pattern), ("color", rule.color_pattern), ("total", rule.total_pattern)):
-                match = re.search(pattern, source, re.IGNORECASE | re.MULTILINE) if pattern else None
+                match = re.search(
+                    pattern, counter_source, re.IGNORECASE | re.MULTILINE,
+                ) if pattern else None
                 if match:
                     counters[counter_type] = _number(match.group(1))
         except (re.error, IndexError, ValueError):
             continue
         if serial_match or counters:
-            return ParsedCounters(f"custom-{rule.brand}", serial_match.group(1).strip() if serial_match else None, counters, source[:4000], 0.95)
+            evidence = f"{serial_source}\n{counter_source}"[:4000]
+            return ParsedCounters(f"custom-{rule.brand}", serial_match.group(1).strip() if serial_match else None, counters, evidence, 0.95)
     return None
 
 

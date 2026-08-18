@@ -732,6 +732,32 @@ def test_custom_bot_rule_can_target_htm_attachment():
     assert parsed.counters == {"black": 1200, "color": 30, "total": 1230}
 
 
+def test_custom_rule_can_read_kyocera_serial_from_mail_and_counters_from_attachment():
+    from app.models import BotRule
+
+    message = EmailMessage(
+        subject="KYOCERA RJF3201840", sender="device@example.com",
+        text_body="Serial Number: RJF3201840", html_body="", attachments=[],
+    )
+    report = b"<html><body>Black &amp; White A4: 1 Full Color A4: 100,000 Total A4: 100,001</body></html>"
+    message.attachments.append(Attachment(
+        filename="counter.htm", mime_type="text/html", size_bytes=len(report),
+        content_sha256="3" * 64, content=report,
+    ))
+    rule = BotRule(
+        brand="교세라", source_type="html_attachment", serial_source_type="email", enabled=True,
+        serial_pattern=r"Serial Number:\s*([A-Z0-9-]+)",
+        black_pattern=r"Black\s*&\s*White\s+A4:\s*([0-9]+(?:[,\s][0-9]+)*)",
+        color_pattern=r"Full\s+Color\s+A4:\s*([0-9]+(?:[,\s][0-9]+)*)",
+        total_pattern=r"Total\s+A4:\s*([0-9]+(?:[,\s][0-9]+)*)",
+    )
+
+    parsed = parse_counter_message(message, [rule])
+
+    assert parsed.serial_number == "RJF3201840"
+    assert parsed.counters == {"black": 1, "color": 100000, "total": 100001}
+
+
 @pytest.mark.parametrize(("filename", "mime_type", "payload", "expected"), [
     ("kyocera.htm", "text/html", b"<table><tr><td>Serial Number:</td><td>RJF3201840</td></tr></table>",
      "RJF3201840"),

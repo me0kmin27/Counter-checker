@@ -70,6 +70,9 @@ class BotRule(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     brand: Mapped[str] = mapped_column(String(100))
     source_type: Mapped[str] = mapped_column(String(20), default="email")
+    # Some devices (notably Kyocera) put identity in the mail body while the
+    # counters live in an attachment. NULL keeps legacy rules on one source.
+    serial_source_type: Mapped[str | None] = mapped_column(String(20))
     subject_keyword: Mapped[str | None] = mapped_column(String(300))
     sender_keyword: Mapped[str | None] = mapped_column(String(300))
     sample_format: Mapped[str] = mapped_column(Text, default="")
