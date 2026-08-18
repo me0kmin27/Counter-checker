@@ -10,7 +10,7 @@ from email.parser import BytesParser
 from email.utils import getaddresses, parsedate_to_datetime
 
 from sqlalchemy import select
-from sqlalchemy.exc import DataError, IntegrityError
+from sqlalchemy.exc import DataError, IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
 from .models import Attachment, EmailMessage, PopAccount
@@ -20,6 +20,7 @@ from .security import decrypt_password
 MAX_MESSAGE_BYTES = 25 * 1024 * 1024
 MAX_POP_LINE_BYTES = MAX_MESSAGE_BYTES
 CONNECT_ATTEMPT_TIMEOUT_SECONDS = 5
+MYSQL_DISCONNECT_CODES = {2006, 2013, 2055}
 
 
 def _create_pop_socket(host: str, port: int, timeout: float | None) -> socket.socket:
@@ -102,6 +103,11 @@ def describe_connection_error(exc: Exception) -> str:
             "메일 데이터가 데이터베이스 컬럼의 저장 한도를 초과했습니다. "
             "서비스를 최신 이미지로 다시 빌드하고 시작하여 DB 스키마 업데이트를 적용하세요."
         )
+    elif isinstance(exc, OperationalError):
+        detail = (
+            "메일 저장 중 데이터베이스 연결이 끊어졌습니다. 잠시 후 다시 수신하세요. "
+            "문제가 반복되면 MySQL 연결 시간 제한과 max_allowed_packet 설정을 확인하세요."
+        )
     elif isinstance(exc, socket.gaierror):
         detail = "POP 서버 주소를 찾을 수 없습니다. 서버 주소를 확인하세요."
     elif isinstance(exc, (TimeoutError, socket.timeout)):
@@ -148,11 +154,7 @@ def _date(value: str | None):
 
 def store_message(db: Session, account: PopAccount, raw: bytes) -> bool:
     digest = hashlib.sha256(raw).hexdigest()
-    exists = db.scalar(select(EmailMessage.id).where(
-        EmailMessage.account_id == account.id, EmailMessage.content_sha256 == digest
-    ))
-    if exists:
-        return False
+    account_id = account.id
     parsed = BytesParser(policy=policy.default).parsebytes(raw)
     text_parts, html_parts, attachments = [], [], []
     for part in parsed.walk():
@@ -171,31 +173,51 @@ def store_message(db: Session, account: PopAccount, raw: bytes) -> bool:
         elif part.get_content_type() == "text/html":
             html_parts.append(content.decode(part.get_content_charset() or "utf-8", errors="replace"))
     recipients = ", ".join(addr for _, addr in getaddresses(parsed.get_all("to", []) + parsed.get_all("cc", [])))
-    message = EmailMessage(
-        account_id=account.id, message_id=_header(parsed.get("Message-ID")) or None,
-        content_sha256=digest, sender=_header(parsed.get("From")), recipients=recipients,
-        subject=_header(parsed.get("Subject")), sent_at=_date(parsed.get("Date")),
-        received_at=datetime.now(timezone.utc), text_body="\n\n".join(text_parts),
-        html_body="\n".join(html_parts), raw_message=raw, attachment_count=len(attachments),
-    )
-    for filename, mime_type, content in attachments:
-        message.attachments.append(Attachment(
-            filename=filename, mime_type=mime_type, size_bytes=len(content),
-            content_sha256=hashlib.sha256(content).hexdigest(), content=content,
-        ))
-    db.add(message)
-    try:
-        db.commit()
-        return True
-    except IntegrityError:
-        db.rollback()
-        return False
+
+    def build_message() -> EmailMessage:
+        message = EmailMessage(
+            account_id=account_id, message_id=_header(parsed.get("Message-ID")) or None,
+            content_sha256=digest, sender=_header(parsed.get("From")), recipients=recipients,
+            subject=_header(parsed.get("Subject")), sent_at=_date(parsed.get("Date")),
+            received_at=datetime.now(timezone.utc), text_body="\n\n".join(text_parts),
+            html_body="\n".join(html_parts), raw_message=raw, attachment_count=len(attachments),
+        )
+        for filename, mime_type, content in attachments:
+            message.attachments.append(Attachment(
+                filename=filename, mime_type=mime_type, size_bytes=len(content),
+                content_sha256=hashlib.sha256(content).hexdigest(), content=content,
+            ))
+        return message
+
+    for attempt in range(2):
+        try:
+            exists = db.scalar(select(EmailMessage.id).where(
+                EmailMessage.account_id == account_id, EmailMessage.content_sha256 == digest
+            ))
+            if exists:
+                return False
+            db.add(build_message())
+            db.commit()
+            return True
+        except IntegrityError:
+            db.rollback()
+            return False
+        except OperationalError as exc:
+            db.rollback()
+            error_code = exc.orig.args[0] if getattr(exc.orig, "args", ()) else None
+            if attempt or not (exc.connection_invalidated or error_code in MYSQL_DISCONNECT_CODES):
+                raise
+    return False
 
 
 def fetch_account(db: Session, account: PopAccount) -> int:
     client = None
     saved = 0
     try:
+        # Account lookup starts a transaction and checks out a connection. Do
+        # not leave that connection idle during a potentially long POP session;
+        # pool_pre_ping cannot validate a connection that is already checked out.
+        db.commit()
         security_mode = account.security_mode or ("ssl" if account.use_ssl else "starttls")
         if security_mode == "auto":
             security_mode = "ssl" if account.port == 995 else "starttls"

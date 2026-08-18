@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, call, patch
 
 import pytest
 from sqlalchemy.dialects import mysql
-from sqlalchemy.exc import DataError
+from sqlalchemy.exc import DataError, OperationalError
 from sqlalchemy.schema import CreateTable
 
 from app.database import SessionLocal
@@ -87,6 +87,35 @@ def test_store_and_view_mime_message(client):
     assert "8월 카운터" in detail.text
     assert "누적 카운터" in detail.text
     assert "counter.png" in detail.text
+
+
+def test_store_message_retries_after_mysql_disconnect(client):
+    with SessionLocal() as db:
+        account = PopAccount(name="test", host="localhost", port=110, username="u",
+                             encrypted_password=encrypt_password("p"), use_ssl=False)
+        db.add(account)
+        db.commit()
+        mime = MimeMessage()
+        mime.set_content("counter")
+        original_commit = db.commit
+        attempts = 0
+
+        def flaky_commit():
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise OperationalError(
+                    "INSERT INTO email_messages ...", {},
+                    Exception(2006, "MySQL server has gone away"),
+                    connection_invalidated=True,
+                )
+            original_commit()
+
+        with patch.object(db, "commit", side_effect=flaky_commit):
+            assert store_message(db, account, mime.as_bytes()) is True
+
+        assert attempts == 2
+        assert db.query(EmailMessage).count() == 1
 
 
 def test_prototype_domain_relations(client):
@@ -322,6 +351,18 @@ def test_database_size_error_is_sanitized_and_actionable():
     ))
 
     assert "DB 스키마 업데이트" in error
+    assert "INSERT INTO" not in error
+
+
+def test_database_disconnect_error_is_sanitized_and_actionable():
+    error = describe_connection_error(OperationalError(
+        "INSERT INTO email_messages ...", {},
+        Exception(2006, "MySQL server has gone away"),
+        connection_invalidated=True,
+    ))
+
+    assert "데이터베이스 연결이 끊어졌습니다" in error
+    assert "max_allowed_packet" in error
     assert "INSERT INTO" not in error
 
 
