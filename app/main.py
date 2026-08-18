@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session, selectinload
 from .database import Base, SessionLocal, engine, get_db
 from .models import Attachment, EmailMessage, PopAccount
 from .pop_service import fetch_account
+from .schema_compat import migrate_legacy_mail_schema
 from .security import encrypt_password
 
 
@@ -41,6 +42,7 @@ async def poll_loop():
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     Base.metadata.create_all(engine)
+    migrate_legacy_mail_schema(engine)
     task = asyncio.create_task(poll_loop())
     yield
     task.cancel()
