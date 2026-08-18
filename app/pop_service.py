@@ -1,5 +1,7 @@
 import hashlib
 import poplib
+import socket
+import ssl
 from datetime import datetime, timezone
 from email import policy
 from email.header import decode_header, make_header
@@ -15,6 +17,30 @@ from .security import decrypt_password
 
 
 MAX_MESSAGE_BYTES = 25 * 1024 * 1024
+
+
+def describe_connection_error(exc: Exception) -> str:
+    """Return a useful, password-safe error for the POP settings screen."""
+    if isinstance(exc, socket.gaierror):
+        detail = "POP 서버 주소를 찾을 수 없습니다. 서버 주소를 확인하세요."
+    elif isinstance(exc, (TimeoutError, socket.timeout)):
+        detail = "POP 서버 연결 시간이 초과되었습니다. 주소, 포트, 방화벽을 확인하세요."
+    elif isinstance(exc, ConnectionRefusedError):
+        detail = "POP 서버가 연결을 거부했습니다. 주소와 포트를 확인하세요."
+    elif isinstance(exc, ssl.SSLCertVerificationError):
+        detail = "POP 서버 TLS 인증서를 확인할 수 없습니다. 인증서와 서버 시간을 확인하세요."
+    elif isinstance(exc, ssl.SSLError):
+        detail = "POP 서버와 TLS 연결에 실패했습니다. SSL 사용 여부와 포트를 확인하세요."
+    elif isinstance(exc, poplib.error_proto):
+        response = str(exc)
+        if exc.args and isinstance(exc.args[0], bytes):
+            response = exc.args[0].decode("utf-8", errors="replace")
+        detail = f"POP 서버 응답: {response}"
+    elif isinstance(exc, OSError):
+        detail = f"POP 서버에 연결할 수 없습니다: {exc}"
+    else:
+        detail = f"POP 수신 중 오류가 발생했습니다: {exc}"
+    return detail.replace("\r", " ").replace("\n", " ")[:500]
 
 
 def _header(value: str | None) -> str:
@@ -99,7 +125,7 @@ def fetch_account(db: Session, account: PopAccount) -> int:
         return saved
     except Exception as exc:
         db.rollback()
-        account.last_error = str(exc)[:500]
+        account.last_error = describe_connection_error(exc)
         raise
     finally:
         account.last_checked_at = datetime.now(timezone.utc)
