@@ -24,7 +24,17 @@ def get_db():
 
 def ensure_compatibility_schema():
     """Add columns introduced after the initial create_all-only deployment."""
-    if "pop_accounts" not in inspect(engine).get_table_names():
+    table_names = inspect(engine).get_table_names()
+    if "organizations" in table_names:
+        organization_columns = {
+            column["name"] for column in inspect(engine).get_columns("organizations")
+        }
+        with engine.begin() as connection:
+            if "phone" not in organization_columns:
+                connection.execute(text("ALTER TABLE organizations ADD COLUMN phone VARCHAR(50)"))
+            if "email" not in organization_columns:
+                connection.execute(text("ALTER TABLE organizations ADD COLUMN email VARCHAR(320)"))
+    if "pop_accounts" not in table_names:
         return
     columns = {column["name"] for column in inspect(engine).get_columns("pop_accounts")}
     if "security_mode" not in columns:
