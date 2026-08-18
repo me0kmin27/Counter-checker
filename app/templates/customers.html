@@ -26,8 +26,7 @@
         <td>{{ organization.phone or '-' }}</td><td>{% if organization.email %}<a href="mailto:{{ organization.email }}">{{ organization.email }}</a>{% else %}-{% endif %}</td>
         <td>{{ device.installed_at.strftime('%Y-%m-%d') if device and device.installed_at else '-' }}</td>
         <td><div class="row-actions">
-          {% if device %}<button class="button ghost" type="button" data-open-dialog="edit-{{ organization.id }}">수정</button>{% endif %}
-          <form method="post" action="/customers/{{ organization.id }}/delete" onsubmit="return confirm('‘{{ organization.name }}’ 거래처를 삭제하시겠습니까?')"><button class="button danger" type="submit">삭제</button></form>
+          <button class="button ghost" type="button" data-open-dialog="edit-{{ organization.id }}">관리</button>
         </div></td>
       </tr>
     {% endfor %}
@@ -50,13 +49,20 @@
 </dialog>
 {% for organization in organizations %}
   {% set device = organization.sites[0].devices[0] if organization.sites and organization.sites[0].devices else none %}
-  {% if device %}<dialog class="customer-dialog" id="edit-{{ organization.id }}">
+  <dialog class="customer-dialog" id="edit-{{ organization.id }}">
+    {% if device %}
     <form method="post" action="/customers/{{ organization.id }}/edit">
       <div class="dialog-title"><div><h2>거래처 정보 수정</h2><p>등록된 업체와 복합기 정보를 변경합니다.</p></div><button type="button" class="dialog-close" data-close-dialog aria-label="닫기">×</button></div>
       {% with company_name=organization.name, model_name=device.model, serial_number=device.serial_number, phone=organization.phone, email=organization.email, started_at=device.installed_at.strftime('%Y-%m-%d') if device.installed_at else '' %}{% include "customer_form_fields.html" %}{% endwith %}
-      <div class="dialog-actions"><button class="button ghost" type="button" data-close-dialog>취소</button><button class="button primary compact" type="submit">저장</button></div>
+      <div class="dialog-actions"><button class="button danger dialog-delete" type="submit" formaction="/customers/{{ organization.id }}/delete" onclick="return confirm('‘{{ organization.name }}’ 거래처를 삭제하시겠습니까?')">거래처 삭제</button><span class="dialog-action-spacer"></span><button class="button ghost" type="button" data-close-dialog>취소</button><button class="button primary compact" type="submit">저장</button></div>
     </form>
-  </dialog>{% endif %}
+    {% else %}
+    <form method="post" action="/customers/{{ organization.id }}/delete" onsubmit="return confirm('‘{{ organization.name }}’ 거래처를 삭제하시겠습니까?')">
+      <div class="dialog-title"><div><h2>{{ organization.name }}</h2><p>등록된 복합기 정보가 없는 거래처입니다.</p></div><button type="button" class="dialog-close" data-close-dialog aria-label="닫기">×</button></div>
+      <div class="dialog-actions"><button class="button danger" type="submit">거래처 삭제</button><span class="dialog-action-spacer"></span><button class="button ghost" type="button" data-close-dialog>닫기</button></div>
+    </form>
+    {% endif %}
+  </dialog>
 {% endfor %}
 <script>
 document.querySelectorAll('[data-open-dialog]').forEach((button) => button.addEventListener('click', () => document.getElementById(button.dataset.openDialog).showModal()));
