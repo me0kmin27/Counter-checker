@@ -11,16 +11,14 @@ permissions:
   contents: read
 
 concurrency:
-  group: 
-Counter-checker-production-deploy
+  group: Counter-checker-production-deploy
   cancel-in-progress: true
 
 jobs:
   deploy:
     if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
-    environment: 
-Counter-checker
+    environment: Counter-checker
 
     steps:
       - name: Checkout merged code
