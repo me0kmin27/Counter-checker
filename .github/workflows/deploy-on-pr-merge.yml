@@ -56,7 +56,7 @@ jobs:
             -i ~/.ssh/deploy_key \
             -p "${{ secrets.DEPLOY_PORT }}" \
             "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" \
-            "cd '${{ secrets.DEPLOY_PATH }}' && docker compose up -d --build --remove-orphans"
+            "cd '${{ secrets.DEPLOY_PATH }}' && ./scripts/ensure-compose-env.sh && docker compose up -d --build --remove-orphans"
 
       - name: Verify web application health
         run: |

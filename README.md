@@ -56,6 +56,19 @@ sudo ./scripts/install-debian.sh
 6. **받은 메일**에서 수신한 메일의 본문과 첨부 파일을 확인합니다.
 7. 이후 활성화된 계정은 cron이 5분마다 자동으로 확인합니다.
 
+## Docker Compose 실행
+
+처음 실행할 때는 다음 명령을 사용합니다. `.env`가 없거나 `APP_SECRET_KEY`가 비어 있으면
+실행 전에 Fernet 호환 비밀키를 자동 생성하며, 이미 설정된 키는 변경하지 않습니다.
+
+```bash
+make compose-up
+```
+
+`docker compose up`을 직접 실행하려면 먼저 `./scripts/ensure-compose-env.sh`를 한 번 실행하세요.
+운영 중 `APP_SECRET_KEY`를 변경하면 저장된 POP 비밀번호를 복호화할 수 없으므로 기존 `.env`를
+안전하게 보관해야 합니다.
+
 POP 계정 등록, 화면별 기능, 자동 수신 확인 및 오류 해결 방법은
 [사용 방법 문서](docs/usage.md)에 자세히 정리되어 있습니다.
 

@@ -10,6 +10,7 @@ test:
 	.venv/bin/pytest
 
 compose-up:
+	./scripts/ensure-compose-env.sh
 	docker compose up --build
 
 compose-down:
