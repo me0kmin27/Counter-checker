@@ -1,0 +1,38 @@
+name: Test SSH Connection
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test-ssh:
+    runs-on: ubuntu-latest
+    environment: keimirror
+
+    steps:
+      - name: Validate secrets
+        run: |
+          test -n "${{ secrets.DEPLOY_HOST }}" || (echo "DEPLOY_HOST is empty" && exit 1)
+          test -n "${{ secrets.DEPLOY_PORT }}" || (echo "DEPLOY_PORT is empty" && exit 1)
+          test -n "${{ secrets.DEPLOY_USER }}" || (echo "DEPLOY_USER is empty" && exit 1)
+          test -n "${{ secrets.DEPLOY_SSH_KEY }}" || (echo "DEPLOY_SSH_KEY is empty" && exit 1)
+
+      - name: Prepare SSH key
+        run: |
+          mkdir -p ~/.ssh
+          printf "%s\n" "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+
+          ssh-keyscan -T 10 \
+            -p "${{ secrets.DEPLOY_PORT }}" \
+            -t rsa,ecdsa,ed25519 \
+            "${{ secrets.DEPLOY_HOST }}" >> ~/.ssh/known_hosts
+
+          chmod 644 ~/.ssh/known_hosts
+
+      - name: Test connection
+        run: |
+          ssh -vvv \
+            -i ~/.ssh/deploy_key \
+            -p "${{ secrets.DEPLOY_PORT }}" \
+            "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" \
+            "whoami && hostname && pwd"
