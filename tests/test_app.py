@@ -1,8 +1,10 @@
 import errno
 from email.message import EmailMessage as MimeMessage
+from io import BytesIO
 import socket
 from unittest.mock import MagicMock, call, patch
 
+import pytest
 from sqlalchemy.dialects import mysql
 from sqlalchemy.exc import DataError
 from sqlalchemy.schema import CreateTable
@@ -11,7 +13,14 @@ from app.database import SessionLocal
 from app.models import (
     Attachment, CounterReading, Device, EmailMessage, ExtractionRun, Organization, PopAccount, Site,
 )
-from app.pop_service import _create_pop_socket, describe_connection_error, fetch_account, store_message
+from app.pop_service import (
+    MAX_POP_LINE_BYTES,
+    _IPv4PreferredPOP3,
+    _create_pop_socket,
+    describe_connection_error,
+    fetch_account,
+    store_message,
+)
 from app.security import decrypt_password, encrypt_password
 
 
@@ -267,6 +276,27 @@ def test_pop_protocol_error_bytes_are_readable():
     import poplib
     error = describe_connection_error(poplib.error_proto(b"-ERR invalid login"))
     assert error == "POP 서버 응답: -ERR invalid login"
+
+
+def test_pop_client_accepts_message_lines_longer_than_poplib_default():
+    client = _IPv4PreferredPOP3.__new__(_IPv4PreferredPOP3)
+    client.file = BytesIO(b"x" * 4096 + b"\r\n")
+    client._debugging = 0
+
+    line, octets = client._getline()
+
+    assert line == b"x" * 4096
+    assert octets == 4098
+
+
+def test_pop_client_rejects_a_line_larger_than_message_limit():
+    client = _IPv4PreferredPOP3.__new__(_IPv4PreferredPOP3)
+    client.file = BytesIO(b"x" * (MAX_POP_LINE_BYTES + 1))
+    client._debugging = 0
+
+    import poplib
+    with pytest.raises(poplib.error_proto, match="message size limit"):
+        client._getline()
 
 
 def test_network_unreachable_error_explains_container_and_ipv4_checks():

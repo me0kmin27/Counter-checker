@@ -18,6 +18,7 @@ from .security import decrypt_password
 
 
 MAX_MESSAGE_BYTES = 25 * 1024 * 1024
+MAX_POP_LINE_BYTES = MAX_MESSAGE_BYTES
 CONNECT_ATTEMPT_TIMEOUT_SECONDS = 5
 
 
@@ -60,12 +61,35 @@ def _create_pop_socket(host: str, port: int, timeout: float | None) -> socket.so
     raise connection_errors[0]
 
 
-class _IPv4PreferredPOP3(poplib.POP3):
+class _LongLinePOP3Mixin:
+    """Accept non-standard long POP lines without changing poplib globally."""
+
+    def _getline(self):
+        # poplib's 2 KiB limit is appropriate for POP command responses, but
+        # RETR also uses it for message data. Some servers return MIME payloads
+        # without wrapping them, so permit a line up to our message size cap.
+        line = self.file.readline(MAX_POP_LINE_BYTES + 1)
+        if len(line) > MAX_POP_LINE_BYTES:
+            raise poplib.error_proto("POP response line exceeds message size limit")
+        if self._debugging > 1:
+            print("*get*", repr(line))
+        if not line:
+            raise poplib.error_proto("-ERR EOF")
+
+        octets = len(line)
+        if line[-2:] == b"\r\n":
+            return line[:-2], octets
+        if line[:1] == b"\r":
+            return line[1:-1], octets
+        return line[:-1], octets
+
+
+class _IPv4PreferredPOP3(_LongLinePOP3Mixin, poplib.POP3):
     def _create_socket(self, timeout):
         return _create_pop_socket(self.host, self.port, timeout)
 
 
-class _IPv4PreferredPOP3SSL(poplib.POP3_SSL):
+class _IPv4PreferredPOP3SSL(_LongLinePOP3Mixin, poplib.POP3_SSL):
     def _create_socket(self, timeout):
         sock = _create_pop_socket(self.host, self.port, timeout)
         return self.context.wrap_socket(sock, server_hostname=self.host)
