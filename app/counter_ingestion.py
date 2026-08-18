@@ -251,6 +251,17 @@ def _custom_rule(message: EmailMessage, rules: list[BotRule]) -> ParsedCounters 
             serial_match = re.search(
                 rule.serial_pattern, serial_source, re.IGNORECASE | re.MULTILINE,
             )
+            serial_number = serial_match.group(1).strip() if serial_match else None
+            # Rules saved from an older sample can be accidentally tied to that
+            # sample's value (for example, a pattern that accepts 11Y... but not
+            # WDM...).  A failed custom target must not hide a standard labelled
+            # serial that the built-in parser can read from the very same source.
+            # Keep an explicit custom match authoritative, and only use this as a
+            # compatibility fallback for common Serial Number/S/N labels.
+            if not serial_number:
+                serial_number = _extract(
+                    serial_source, f"custom-{rule.brand}-serial-fallback", 0.95,
+                ).serial_number
             counters = {}
             for counter_type, pattern in (("black", rule.black_pattern), ("color", rule.color_pattern), ("total", rule.total_pattern)):
                 match = re.search(
@@ -260,9 +271,11 @@ def _custom_rule(message: EmailMessage, rules: list[BotRule]) -> ParsedCounters 
                     counters[counter_type] = _number(match.group(1))
         except (re.error, IndexError, ValueError):
             continue
-        if serial_match or counters:
+        if serial_number or counters:
             evidence = f"{serial_source}\n{counter_source}"[:4000]
-            return ParsedCounters(f"custom-{rule.brand}", serial_match.group(1).strip() if serial_match else None, counters, evidence, 0.95)
+            return ParsedCounters(
+                f"custom-{rule.brand}", serial_number, counters, evidence, 0.95,
+            )
     return None
 
 

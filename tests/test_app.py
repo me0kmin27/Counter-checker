@@ -774,6 +774,34 @@ def test_custom_rule_can_read_kyocera_serial_from_mail_and_counters_from_attachm
     assert parsed.counters == {"black": 1, "color": 100000, "total": 100001}
 
 
+def test_custom_kyocera_rule_falls_back_from_sample_specific_serial_pattern():
+    """A legacy 11Y-based target must not make an otherwise identical WDM unit disappear."""
+    from app.models import BotRule
+
+    message = EmailMessage(
+        subject="KYOCERA Counter", sender="device@example.com",
+        text_body="Equipment ID: Serial Number: WDM3500938", html_body="", attachments=[],
+    )
+    report = b"<html><body>Total A4: 7,654</body></html>"
+    message.attachments.append(Attachment(
+        filename="counter.htm", mime_type="text/html", size_bytes=len(report),
+        content_sha256="b" * 64, content=report,
+    ))
+    rule = BotRule(
+        brand="교세라", source_type="html_attachment", serial_source_type="email",
+        enabled=True,
+        # Simulates a rule persisted from the working 11Y5300412 sample.
+        serial_pattern=r"Serial Number:\s*(11Y[0-9]+)",
+        total_pattern=r"Total A4:\s*([0-9,]+)",
+    )
+
+    parsed = parse_counter_message(message, [rule])
+
+    assert parsed.adapter == "custom-교세라"
+    assert parsed.serial_number == "WDM3500938"
+    assert parsed.counters == {"total": 7654}
+
+
 def test_custom_rule_reads_only_the_named_kyocera_attachment():
     from app.models import BotRule
 
