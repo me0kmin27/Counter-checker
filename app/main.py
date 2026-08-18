@@ -1,6 +1,7 @@
 import asyncio
 import calendar
 import os
+import re
 from datetime import datetime, time, timezone
 from contextlib import asynccontextmanager, suppress
 from urllib.parse import quote
@@ -15,10 +16,11 @@ from sqlalchemy.orm import Session, selectinload
 
 from .database import Base, SessionLocal, engine, ensure_compatibility_schema, get_db
 from .models import (
-    Attachment, CounterReading, Device, EmailMessage, ExtractionRun, Organization,
+    Attachment, BotRule, CounterReading, Device, EmailMessage, ExtractionRun, Organization,
     PopAccount, ProcessingEvent, Site, User,
 )
 from .pop_service import fetch_account
+from .counter_ingestion import process_counter_message
 from .security import (
     encrypt_password, hash_user_password, new_totp_secret, totp_uri, verify_totp,
     verify_user_password,
@@ -128,9 +130,9 @@ async def authentication(request: Request, call_next):
     if not public and not user:
         return RedirectResponse(f"/login?next={quote(request.url.path)}", status_code=303)
     required = 2 if request.url.path.startswith("/users") else (
-        1 if request.url.path.startswith("/settings") else 0
+        1 if request.url.path.startswith(("/settings", "/bot-settings")) else 0
     )
-    if request.method == "POST" and request.url.path.startswith(("/mail", "/counters", "/customers")):
+    if request.method == "POST" and request.url.path.startswith(("/mail", "/counters", "/customers", "/bot-settings")):
         required = max(required, 1)
     if user and ROLE_LEVEL.get(user.role, -1) < required:
         return PlainTextResponse("이 작업을 수행할 권한이 없습니다.", status_code=403)
@@ -600,7 +602,7 @@ def bulk_delete_messages(
         query = query.where(EmailMessage.id.in_(set(message_ids)))
     messages = db.scalars(query).all()
     for message in messages:
-        db.delete(message)
+        _delete_stored_message(db, message)
     db.commit()
     notice = quote(f"메일 {len(messages)}건을 삭제했습니다.")
     return RedirectResponse(f"/mail?notice={notice}", status_code=303)
@@ -613,7 +615,19 @@ def mail_detail(message_id: int, request: Request, db: Session = Depends(get_db)
     ).where(EmailMessage.id == message_id))
     if not message:
         raise HTTPException(404)
-    return templates.TemplateResponse(request, "mail_detail.html", {"message": message})
+    return templates.TemplateResponse(request, "mail_detail.html", {
+        "message": message, "notice": request.query_params.get("notice")
+    })
+
+
+@app.post("/mail/{message_id}/extract")
+def extract_message(message_id: int, db: Session = Depends(get_db)):
+    message = db.get(EmailMessage, message_id)
+    if not message:
+        raise HTTPException(404)
+    run = process_counter_message(db, message)
+    notice = "카운터 추출을 실행했습니다." if run else "추출할 카운터 정보를 찾지 못했습니다."
+    return RedirectResponse(f"/mail/{message_id}?notice={quote(notice)}", status_code=303)
 
 
 @app.get("/mail/{message_id}/raw")
@@ -632,9 +646,67 @@ def delete_message(message_id: int, db: Session = Depends(get_db)):
     message = db.get(EmailMessage, message_id)
     if not message:
         raise HTTPException(404)
-    db.delete(message)
+    _delete_stored_message(db, message)
     db.commit()
     return RedirectResponse("/mail?notice=%EB%A9%94%EC%9D%BC%EC%9D%84%20%EC%82%AD%EC%A0%9C%ED%96%88%EC%8A%B5%EB%8B%88%EB%8B%A4", status_code=303)
+
+
+def _delete_stored_message(db: Session, message: EmailMessage):
+    """Delete extraction history first for databases with restrictive foreign keys."""
+    runs = db.scalars(select(ExtractionRun).options(selectinload(ExtractionRun.readings))
+                      .where(ExtractionRun.email_id == message.id)).all()
+    for run in runs:
+        for reading in run.readings:
+            db.delete(reading)
+        db.flush()
+        db.delete(run)
+    for event in db.scalars(select(ProcessingEvent).where(ProcessingEvent.email_id == message.id)).all():
+        db.delete(event)
+    db.flush()
+    db.delete(message)
+
+
+@app.get("/bot-settings", response_class=HTMLResponse)
+def bot_settings(request: Request, db: Session = Depends(get_db)):
+    return templates.TemplateResponse(request, "bot_settings.html", {
+        "rules": db.scalars(select(BotRule).order_by(BotRule.brand, BotRule.id)).all(),
+        "notice": request.query_params.get("notice"),
+    })
+
+
+@app.post("/bot-settings")
+def add_bot_rule(brand: str = Form(...), source_type: str = Form(...),
+                 subject_keyword: str = Form(""), sender_keyword: str = Form(""),
+                 sample_format: str = Form(""), serial_pattern: str = Form(...),
+                 black_pattern: str = Form(""), color_pattern: str = Form(""),
+                 total_pattern: str = Form(""), enabled: bool = Form(False),
+                 db: Session = Depends(get_db)):
+    if source_type not in {"email", "ocr", "rtf"} or not brand.strip() or not serial_pattern.strip():
+        raise HTTPException(422, "브랜드, 원본 유형, 시리얼 타겟을 확인하세요.")
+    try:
+        for pattern in (serial_pattern, black_pattern, color_pattern, total_pattern):
+            if pattern.strip() and re.compile(pattern).groups < 1:
+                raise ValueError
+    except (re.error, ValueError):
+        raise HTTPException(422, "각 타겟 정규식에는 추출할 값을 감싸는 그룹 ( )이 필요합니다.")
+    db.add(BotRule(brand=brand.strip(), source_type=source_type,
+                   subject_keyword=subject_keyword.strip() or None,
+                   sender_keyword=sender_keyword.strip() or None, sample_format=sample_format,
+                   serial_pattern=serial_pattern.strip(), black_pattern=black_pattern.strip() or None,
+                   color_pattern=color_pattern.strip() or None, total_pattern=total_pattern.strip() or None,
+                   enabled=enabled))
+    db.commit()
+    return RedirectResponse("/bot-settings?notice=" + quote("봇 설정을 저장했습니다."), 303)
+
+
+@app.post("/bot-settings/{rule_id}/delete")
+def delete_bot_rule(rule_id: int, db: Session = Depends(get_db)):
+    rule = db.get(BotRule, rule_id)
+    if not rule:
+        raise HTTPException(404)
+    db.delete(rule)
+    db.commit()
+    return RedirectResponse("/bot-settings?notice=" + quote("봇 설정을 삭제했습니다."), 303)
 
 
 @app.get("/attachments/{attachment_id}")
