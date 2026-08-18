@@ -1,0 +1,8 @@
+<div class="form-grid customer-form-grid">
+  <label>업체명<input name="company_name" value="{{ company_name|default('') }}" maxlength="200" required></label>
+  <label>복합기 모델명<input name="model_name" value="{{ model_name|default('') }}" maxlength="150" required></label>
+  <label>시리얼넘버<input name="serial_number" value="{{ serial_number|default('') }}" maxlength="150" required></label>
+  <label>전화번호<input type="tel" name="phone" value="{{ phone|default('') }}" maxlength="50" required></label>
+  <label>메일주소<input type="email" name="email" value="{{ email|default('') }}" maxlength="320" required></label>
+  <label>사용시작일<input type="date" name="started_at" value="{{ started_at|default('') }}" required></label>
+</div>

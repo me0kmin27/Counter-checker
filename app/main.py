@@ -384,23 +384,51 @@ def counter_workspace(request: Request, organization_id: str = "", months: int =
 
 
 @app.get("/customers", response_class=HTMLResponse)
-def customers(request: Request, db: Session = Depends(get_db)):
+def customers(request: Request, q: str = Query("", max_length=200),
+              page: int = Query(1, ge=1), db: Session = Depends(get_db)):
+    per_page = 30
+    search = q.strip()
+    filters = []
+    if search:
+        pattern = f"%{search}%"
+        filters.append(or_(
+            Organization.name.ilike(pattern), Organization.phone.ilike(pattern),
+            Organization.email.ilike(pattern),
+            Organization.sites.any(Site.devices.any(or_(
+                Device.model.ilike(pattern), Device.serial_number.ilike(pattern)
+            ))),
+        ))
+    count_query = select(func.count()).select_from(Organization)
+    if filters:
+        count_query = count_query.where(*filters)
+    total = db.scalar(count_query) or 0
+    total_pages = max(1, (total + per_page - 1) // per_page)
+    page = min(page, total_pages)
+    query = select(Organization).options(
+        selectinload(Organization.sites).selectinload(Site.devices)
+    ).order_by(Organization.name, Organization.id)
+    if filters:
+        query = query.where(*filters)
     organizations = db.scalars(
-        select(Organization).options(
-            selectinload(Organization.sites).selectinload(Site.devices)
-        ).order_by(Organization.name)
+        query.offset((page - 1) * per_page).limit(per_page)
     ).all()
     return templates.TemplateResponse(request, "customers.html", {
-        "organizations": organizations, "notice": request.query_params.get("notice")
+        "organizations": organizations, "notice": request.query_params.get("notice"),
+        "q": search, "page": page, "total": total, "total_pages": total_pages,
     })
 
 
 @app.post("/customers")
 def add_customer(company_name: str = Form(...), model_name: str = Form(...),
                  serial_number: str = Form(...), phone: str = Form(...), email: str = Form(...),
+                 started_at: str = Form(...),
                  db: Session = Depends(get_db)):
     company_name, model_name = company_name.strip(), model_name.strip()
     serial_number, phone, email = serial_number.strip(), phone.strip(), email.strip()
+    try:
+        installed_at = datetime.fromisoformat(started_at.strip())
+    except ValueError:
+        raise HTTPException(422, "사용시작일을 올바르게 입력하세요.")
     if not all((company_name, model_name, serial_number, phone, email)) or "@" not in email:
         raise HTTPException(422, "거래처 정보를 올바르게 입력하세요.")
     normalized_serial = "".join(serial_number.upper().split())
@@ -409,11 +437,53 @@ def add_customer(company_name: str = Form(...), model_name: str = Form(...),
     organization = Organization(name=company_name, phone=phone, email=email)
     site = Site(name="기본 사업장")
     site.devices.append(Device(brand="미지정", model=model_name, serial_number=serial_number,
-                               normalized_serial=normalized_serial))
+                               normalized_serial=normalized_serial, installed_at=installed_at))
     organization.sites.append(site)
     db.add(organization)
     db.commit()
     return RedirectResponse("/customers?notice=" + quote("거래처를 등록했습니다."), 303)
+
+
+@app.post("/customers/{organization_id}/edit")
+def edit_customer(organization_id: int, company_name: str = Form(...),
+                  model_name: str = Form(...), serial_number: str = Form(...),
+                  phone: str = Form(...), email: str = Form(...), started_at: str = Form(...),
+                  db: Session = Depends(get_db)):
+    organization = db.scalar(select(Organization).options(
+        selectinload(Organization.sites).selectinload(Site.devices)
+    ).where(Organization.id == organization_id))
+    if not organization or not organization.sites or not organization.sites[0].devices:
+        raise HTTPException(404, "거래처를 찾을 수 없습니다.")
+    company_name, model_name = company_name.strip(), model_name.strip()
+    serial_number, phone, email = serial_number.strip(), phone.strip(), email.strip()
+    try:
+        installed_at = datetime.fromisoformat(started_at.strip())
+    except ValueError:
+        raise HTTPException(422, "사용시작일을 올바르게 입력하세요.")
+    if not all((company_name, model_name, serial_number, phone, email)) or "@" not in email:
+        raise HTTPException(422, "거래처 정보를 올바르게 입력하세요.")
+    device = organization.sites[0].devices[0]
+    normalized_serial = "".join(serial_number.upper().split())
+    duplicate = db.scalar(select(Device.id).where(
+        Device.normalized_serial == normalized_serial, Device.id != device.id
+    ))
+    if duplicate:
+        raise HTTPException(422, "이미 등록된 시리얼넘버입니다.")
+    organization.name, organization.phone, organization.email = company_name, phone, email
+    device.model, device.serial_number = model_name, serial_number
+    device.normalized_serial, device.installed_at = normalized_serial, installed_at
+    db.commit()
+    return RedirectResponse("/customers?notice=" + quote("거래처 정보를 수정했습니다."), 303)
+
+
+@app.post("/customers/{organization_id}/delete")
+def delete_customer(organization_id: int, db: Session = Depends(get_db)):
+    organization = db.get(Organization, organization_id)
+    if not organization:
+        raise HTTPException(404, "거래처를 찾을 수 없습니다.")
+    db.delete(organization)
+    db.commit()
+    return RedirectResponse("/customers?notice=" + quote("거래처를 삭제했습니다."), 303)
 
 
 @app.get("/counters/{reading_id}", response_class=HTMLResponse)

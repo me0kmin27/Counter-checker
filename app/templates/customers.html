@@ -1,6 +1,66 @@
-{% extends "base.html" %}{% block title %}거래처 관리 · Counter Checker{% endblock %}{% block heading %}거래처 관리{% endblock %}{% block description %}거래처 연락처와 복합기 정보를 등록하고 확인합니다.{% endblock %}{% block content %}
+{% extends "base.html" %}
+{% block title %}거래처 관리 · Counter Checker{% endblock %}
+{% block heading %}거래처 관리{% endblock %}
+{% block description %}거래처 연락처와 복합기 정보를 등록하고 관리합니다.{% endblock %}
+{% block content %}
 {% if notice %}<div class="alert">{{ notice }}</div>{% endif %}
-<div class="columns"><section class="panel"><div class="panel-title"><div><h2>등록 거래처</h2><p>업체별 연락처와 등록 복합기입니다.</p></div></div>
-{% if organizations %}<div class="table-wrap"><table><thead><tr><th>업체명</th><th>복합기 모델명</th><th>시리얼넘버</th><th>전화번호</th><th>메일주소</th></tr></thead><tbody>{% for organization in organizations %}{% for site in organization.sites %}{% for device in site.devices %}<tr><td>{{ organization.name }}</td><td>{{ device.model }}</td><td>{{ device.serial_number }}</td><td>{{ organization.phone or '-' }}</td><td><a href="mailto:{{ organization.email }}">{{ organization.email or '-' }}</a></td></tr>{% endfor %}{% endfor %}{% endfor %}</tbody></table></div>{% else %}<div class="empty"><b>등록된 거래처가 없습니다.</b><span>오른쪽 양식에서 첫 거래처를 등록하세요.</span></div>{% endif %}</section>
-<section class="panel form-panel"><h2>새 거래처</h2><form method="post" action="/customers"><label>업체명<input name="company_name" required></label><label>복합기 모델명<input name="model_name" required></label><label>시리얼넘버<input name="serial_number" required></label><label>전화번호<input type="tel" name="phone" required></label><label>메일주소<input type="email" name="email" required></label><button class="button primary" type="submit">거래처 등록</button></form></section></div>
+<section class="panel customer-panel">
+  <div class="customer-toolbar">
+    <form class="customer-search" method="get" action="/customers" role="search">
+      <label class="sr-only" for="customer-query">거래처 검색</label>
+      <input id="customer-query" type="search" name="q" value="{{ q }}" placeholder="업체명, 모델명, 시리얼넘버, 연락처 검색">
+      <button class="button ghost" type="submit">검색</button>
+      {% if q %}<a class="button ghost" href="/customers">초기화</a>{% endif %}
+    </form>
+    <button class="button primary compact" type="button" data-open-dialog="create-customer">+ 거래처 등록</button>
+  </div>
+  <div class="list-summary"><b>등록 거래처 {{ total }}개</b><span>한 페이지에 최대 30개 업체를 표시합니다.</span></div>
+  {% if organizations %}
+  <div class="table-wrap"><table class="customer-table">
+    <thead><tr><th>업체명</th><th>복합기 모델명</th><th>시리얼넘버</th><th>전화번호</th><th>메일주소</th><th>사용시작일</th><th>관리</th></tr></thead>
+    <tbody>
+    {% for organization in organizations %}
+      {% set device = organization.sites[0].devices[0] if organization.sites and organization.sites[0].devices else none %}
+      <tr>
+        <td><b>{{ organization.name }}</b></td><td>{{ device.model if device else '-' }}</td><td>{{ device.serial_number if device else '-' }}</td>
+        <td>{{ organization.phone or '-' }}</td><td>{% if organization.email %}<a href="mailto:{{ organization.email }}">{{ organization.email }}</a>{% else %}-{% endif %}</td>
+        <td>{{ device.installed_at.strftime('%Y-%m-%d') if device and device.installed_at else '-' }}</td>
+        <td><div class="row-actions">
+          {% if device %}<button class="button ghost" type="button" data-open-dialog="edit-{{ organization.id }}">수정</button>{% endif %}
+          <form method="post" action="/customers/{{ organization.id }}/delete" onsubmit="return confirm('‘{{ organization.name }}’ 거래처를 삭제하시겠습니까?')"><button class="button danger" type="submit">삭제</button></form>
+        </div></td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  {% if total_pages > 1 %}<nav class="pagination" aria-label="거래처 목록 페이지">
+    {% if page > 1 %}<a class="button ghost" href="/customers?q={{ q|urlencode }}&page={{ page - 1 }}">이전</a>{% endif %}
+    <span><b>{{ page }}</b> / {{ total_pages }}</span>
+    {% if page < total_pages %}<a class="button ghost" href="/customers?q={{ q|urlencode }}&page={{ page + 1 }}">다음</a>{% endif %}
+  </nav>{% endif %}
+  {% else %}<div class="empty"><b>{% if q %}검색 결과가 없습니다.{% else %}등록된 거래처가 없습니다.{% endif %}</b><span>{% if q %}검색어를 바꾸어 다시 찾아보세요.{% else %}상단의 거래처 등록 버튼으로 첫 거래처를 등록하세요.{% endif %}</span></div>{% endif %}
+</section>
+
+<dialog class="customer-dialog" id="create-customer">
+  <form method="post" action="/customers">
+    <div class="dialog-title"><div><h2>거래처 등록</h2><p>업체와 복합기의 기본 정보를 입력하세요.</p></div><button type="button" class="dialog-close" data-close-dialog aria-label="닫기">×</button></div>
+    {% include "customer_form_fields.html" %}
+    <div class="dialog-actions"><button class="button ghost" type="button" data-close-dialog>취소</button><button class="button primary compact" type="submit">등록</button></div>
+  </form>
+</dialog>
+{% for organization in organizations %}
+  {% set device = organization.sites[0].devices[0] if organization.sites and organization.sites[0].devices else none %}
+  {% if device %}<dialog class="customer-dialog" id="edit-{{ organization.id }}">
+    <form method="post" action="/customers/{{ organization.id }}/edit">
+      <div class="dialog-title"><div><h2>거래처 정보 수정</h2><p>등록된 업체와 복합기 정보를 변경합니다.</p></div><button type="button" class="dialog-close" data-close-dialog aria-label="닫기">×</button></div>
+      {% with company_name=organization.name, model_name=device.model, serial_number=device.serial_number, phone=organization.phone, email=organization.email, started_at=device.installed_at.strftime('%Y-%m-%d') if device.installed_at else '' %}{% include "customer_form_fields.html" %}{% endwith %}
+      <div class="dialog-actions"><button class="button ghost" type="button" data-close-dialog>취소</button><button class="button primary compact" type="submit">저장</button></div>
+    </form>
+  </dialog>{% endif %}
+{% endfor %}
+<script>
+document.querySelectorAll('[data-open-dialog]').forEach((button) => button.addEventListener('click', () => document.getElementById(button.dataset.openDialog).showModal()));
+document.querySelectorAll('[data-close-dialog]').forEach((button) => button.addEventListener('click', () => button.closest('dialog').close()));
+document.querySelectorAll('dialog').forEach((dialog) => dialog.addEventListener('click', (event) => { if (event.target === dialog) dialog.close(); }));
+</script>
 {% endblock %}

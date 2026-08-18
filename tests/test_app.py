@@ -344,7 +344,7 @@ def test_customer_registration_creates_company_site_and_device(client):
     response = client.post("/customers", data={
         "company_name": "한빛상사", "model_name": "Bizhub C300i",
         "serial_number": "SN 12-34", "phone": "02-1234-5678",
-        "email": "counter@hanbit.example",
+        "email": "counter@hanbit.example", "started_at": "2026-08-01",
     }, follow_redirects=False)
 
     assert response.status_code == 303
@@ -354,8 +354,43 @@ def test_customer_registration_creates_company_site_and_device(client):
             "한빛상사", "02-1234-5678", "counter@hanbit.example"
         )
         assert organization.sites[0].devices[0].normalized_serial == "SN12-34"
+        assert organization.sites[0].devices[0].installed_at.strftime("%Y-%m-%d") == "2026-08-01"
     page = client.get("/customers")
     assert all(value in page.text for value in ("한빛상사", "Bizhub C300i", "SN 12-34"))
+
+
+def test_customer_search_pagination_edit_and_delete(client):
+    with SessionLocal() as db:
+        for number in range(31):
+            organization = Organization(name=f"업체 {number:02d}", phone=f"02-0000-{number:04d}",
+                                        email=f"company{number}@example.com")
+            site = Site(name="기본 사업장")
+            site.devices.append(Device(brand="미지정", model=f"Model {number}",
+                                       serial_number=f"SERIAL-{number}",
+                                       normalized_serial=f"SERIAL-{number}"))
+            organization.sites.append(site)
+            db.add(organization)
+        db.commit()
+        target_id = db.query(Organization.id).filter(Organization.name == "업체 07").scalar()
+
+    first_page = client.get("/customers")
+    assert first_page.status_code == 200
+    assert first_page.text.count('data-open-dialog="edit-') == 30
+    assert "다음" in first_page.text
+    second_page = client.get("/customers?page=2")
+    assert second_page.text.count('data-open-dialog="edit-') == 1
+    search_page = client.get("/customers?q=SERIAL-7")
+    assert "업체 07" in search_page.text and "업체 08" not in search_page.text
+
+    response = client.post(f"/customers/{target_id}/edit", data={
+        "company_name": "수정 업체", "model_name": "New Model", "serial_number": "NEW-7",
+        "phone": "02-7777-7777", "email": "new@example.com", "started_at": "2026-07-07",
+    }, follow_redirects=False)
+    assert response.status_code == 303
+    assert "수정 업체" in client.get("/customers?q=NEW-7").text
+    assert client.post(f"/customers/{target_id}/delete", follow_redirects=False).status_code == 303
+    with SessionLocal() as db:
+        assert db.get(Organization, target_id) is None
 
 
 def test_counter_workspace_filters_by_company_and_period(client):
