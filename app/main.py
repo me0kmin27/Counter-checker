@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session, selectinload
 from .database import Base, SessionLocal, engine, get_db
 from .models import Attachment, EmailMessage, PopAccount
 from .pop_service import fetch_account
+from .schema_compat import migrate_legacy_mail_schema
 from .security import encrypt_password
 
 
@@ -41,6 +42,7 @@ async def poll_loop():
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     Base.metadata.create_all(engine)
+    migrate_legacy_mail_schema(engine)
     task = asyncio.create_task(poll_loop())
     yield
     task.cancel()
@@ -137,7 +139,9 @@ def fetch(account_id: int, db: Session = Depends(get_db)):
         count = fetch_account(db, account)
         return RedirectResponse(f"/mail?notice={count}%EA%B1%B4%20%EC%88%98%EC%8B%A0", status_code=303)
     except Exception:
-        return RedirectResponse("/settings?error=POP%20%EC%97%B0%EA%B2%B0%20%EC%8B%A4%ED%8C%A8", status_code=303)
+        db.refresh(account)
+        error = quote(account.last_error or "POP 연결에 실패했습니다.")
+        return RedirectResponse(f"/settings?error={error}", status_code=303)
 
 
 @app.get("/mail", response_class=HTMLResponse)
