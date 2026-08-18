@@ -730,3 +730,26 @@ def test_custom_bot_rule_can_target_htm_attachment():
 
     assert parsed.serial_number == "K-100"
     assert parsed.counters == {"black": 1200, "color": 30, "total": 1230}
+
+
+@pytest.mark.parametrize(("filename", "mime_type", "payload", "expected"), [
+    ("kyocera.htm", "text/html", b"<table><tr><td>Serial Number:</td><td>RJF3201840</td></tr></table>",
+     "RJF3201840"),
+    ("samsung.rtf", "application/rtf", b"{\\rtf1 Serial No: SAM-77\\par Total: 52,971}",
+     "Total: 52,971"),
+])
+def test_bot_settings_can_preview_supported_attachment(client, filename, mime_type,
+                                                       payload, expected):
+    response = client.post("/bot-settings/preview", files={"file": (filename, payload, mime_type)})
+
+    assert response.status_code == 200
+    assert expected in response.json()["text"]
+
+
+def test_bot_settings_rejects_unsupported_preview_file(client):
+    response = client.post(
+        "/bot-settings/preview", files={"file": ("counter.pdf", b"pdf", "application/pdf")},
+    )
+
+    assert response.status_code == 415
+    assert "HTM, HTML, RTF" in response.json()["detail"]

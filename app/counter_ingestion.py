@@ -78,6 +78,17 @@ def _html_to_text(content: bytes) -> str:
     return html.unescape(re.sub(r"<[^>]+>", " ", source))
 
 
+def attachment_to_text(filename: str, mime_type: str, content: bytes) -> str:
+    """Return safe, selectable text from a supported counter-report attachment."""
+    name = filename.casefold()
+    mime = mime_type.casefold().split(";", 1)[0].strip()
+    if name.endswith(".rtf") or mime in {"application/rtf", "text/rtf"}:
+        return _rtf_to_text(content)
+    if name.endswith((".htm", ".html")) or mime in {"text/html", "application/xhtml+xml"}:
+        return _html_to_text(content)
+    raise ValueError("HTM, HTML, RTF 파일만 읽을 수 있습니다.")
+
+
 def _html_attachments(message: EmailMessage) -> str:
     return "\n".join(
         _html_to_text(item.content) for item in message.attachments

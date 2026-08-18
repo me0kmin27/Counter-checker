@@ -6,8 +6,8 @@ from datetime import datetime, time, timezone
 from contextlib import asynccontextmanager, suppress
 from urllib.parse import quote
 
-from fastapi import Depends, FastAPI, Form, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse, Response
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
@@ -20,7 +20,7 @@ from .models import (
     PopAccount, ProcessingEvent, Site, User,
 )
 from .pop_service import fetch_account
-from .counter_ingestion import process_counter_message
+from .counter_ingestion import attachment_to_text, process_counter_message
 from .security import (
     encrypt_password, hash_user_password, new_totp_secret, totp_uri, verify_totp,
     verify_user_password,
@@ -697,6 +697,19 @@ def add_bot_rule(brand: str = Form(...), source_type: str = Form(...),
                    enabled=enabled))
     db.commit()
     return RedirectResponse("/bot-settings?notice=" + quote("봇 설정을 저장했습니다."), 303)
+
+
+@app.post("/bot-settings/preview")
+async def preview_bot_attachment(file: UploadFile = File(...)):
+    """Decode an operator's sample report without storing or executing the file."""
+    content = await file.read(2 * 1024 * 1024 + 1)
+    if len(content) > 2 * 1024 * 1024:
+        raise HTTPException(413, "샘플 파일은 2MB 이하여야 합니다.")
+    try:
+        source = attachment_to_text(file.filename or "", file.content_type or "", content)
+    except ValueError as error:
+        raise HTTPException(415, str(error)) from error
+    return JSONResponse({"filename": file.filename, "text": source})
 
 
 @app.post("/bot-settings/{rule_id}/delete")
