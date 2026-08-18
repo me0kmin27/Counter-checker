@@ -45,6 +45,10 @@ def ensure_compatibility_schema():
         "smtp_auth_required": "BOOLEAN NOT NULL DEFAULT 0",
         "smtp_auth_method": "VARCHAR(30) NOT NULL DEFAULT 'same_as_pop'",
         "smtp_username": "VARCHAR(255)", "encrypted_smtp_password": "BLOB",
+        "filter_mode": "VARCHAR(10) NOT NULL DEFAULT 'all'",
+        "filter_sender": "VARCHAR(998)", "filter_recipient": "VARCHAR(998)",
+        "filter_subject": "VARCHAR(998)", "filter_keyword": "TEXT",
+        "filter_date_from": "DATETIME", "filter_date_to": "DATETIME",
     }
     columns = {column["name"] for column in inspect(engine).get_columns("pop_accounts")}
     with engine.begin() as connection:

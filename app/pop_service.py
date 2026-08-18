@@ -152,6 +152,44 @@ def _date(value: str | None):
         return None
 
 
+def message_matches_filters(account: PopAccount, raw: bytes) -> bool:
+    """Apply the account's case-insensitive AND/OR rules to a MIME message."""
+    parsed = BytesParser(policy=policy.default).parsebytes(raw)
+    sender = _header(parsed.get("From"))
+    recipients = ", ".join(
+        _header(value) for value in parsed.get_all("to", []) + parsed.get_all("cc", [])
+    )
+    subject = _header(parsed.get("Subject"))
+    bodies = []
+    for part in parsed.walk():
+        if part.is_multipart() or part.get_content_type() not in {"text/plain", "text/html"}:
+            continue
+        content = part.get_payload(decode=True) or b""
+        bodies.append(content.decode(part.get_content_charset() or "utf-8", errors="replace"))
+
+    checks = []
+    for expected, actual in (
+        (account.filter_sender, sender),
+        (account.filter_recipient, recipients),
+        (account.filter_subject, subject),
+        (account.filter_keyword, "\n".join(bodies)),
+    ):
+        if expected and expected.strip():
+            checks.append(expected.strip().casefold() in actual.casefold())
+    sent_at = _date(parsed.get("Date"))
+    if account.filter_date_from:
+        boundary = account.filter_date_from
+        boundary = boundary if boundary.tzinfo else boundary.replace(tzinfo=timezone.utc)
+        checks.append(sent_at is not None and sent_at >= boundary)
+    if account.filter_date_to:
+        boundary = account.filter_date_to
+        boundary = boundary if boundary.tzinfo else boundary.replace(tzinfo=timezone.utc)
+        checks.append(sent_at is not None and sent_at <= boundary)
+    if not checks:
+        return True
+    return any(checks) if account.filter_mode == "any" else all(checks)
+
+
 def store_message(db: Session, account: PopAccount, raw: bytes) -> bool:
     digest = hashlib.sha256(raw).hexdigest()
     account_id = account.id
@@ -235,6 +273,8 @@ def fetch_account(db: Session, account: PopAccount) -> int:
             if size > MAX_MESSAGE_BYTES:
                 continue
             raw = b"\r\n".join(lines) + b"\r\n"
+            if not message_matches_filters(account, raw):
+                continue
             if store_message(db, account, raw):
                 saved += 1
             if account.delete_after_receive:
