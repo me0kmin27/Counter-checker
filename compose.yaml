@@ -1,6 +1,9 @@
 services:
   mariadb:
     image: mariadb:11.4
+    # A stored message includes both the original MIME payload and decoded
+    # bodies/attachments. Keep MariaDB's packet limit above the 25 MiB POP cap.
+    command: ["--max-allowed-packet=${DB_MAX_ALLOWED_PACKET:-64M}"]
     environment:
       MARIADB_DATABASE: ${DB_NAME:-counter_checker}
       MARIADB_USER: ${DB_USER:-counter}

@@ -110,5 +110,18 @@ Outlook 고급 설정과 같은 형태로 POP의 SSL/TLS 및 SPA 선택값과 SM
   `LONGTEXT`로 자동 확장하므로 `make start`를 실행해 이미지를 다시 빌드하고 업데이트를 적용하십시오.
   적용 여부는 `docker compose exec mariadb mariadb -u root -p -e "SHOW COLUMNS FROM
   counter_checker.email_messages LIKE 'raw_message';"`에서 형식이 `longblob`인지 확인할 수 있습니다.
+- **메일 저장 중 데이터베이스 연결이 끊어짐 / `MySQL server has gone away`**: 큰 원문 메일을
+  INSERT할 때 MariaDB의 `max_allowed_packet`보다 전송 패킷이 크면 서버가 연결을 종료할 수 있습니다.
+  Compose 구성은 25 MiB 메일 원문과 디코딩된 본문·첨부파일을 함께 저장할 수 있도록 기본값을
+  `64M`으로 설정합니다. 최신 구성을 받은 뒤 `make stop`, `make start`로 MariaDB 컨테이너를
+  다시 만들어 적용하십시오(데이터 볼륨은 유지됩니다). 적용값은 다음 명령으로 확인합니다.
+
+  ```bash
+  docker compose exec mariadb mariadb -u root -p -e "SHOW VARIABLES LIKE 'max_allowed_packet';"
+  ```
+
+  외부 MySQL/MariaDB를 사용하는 경우 해당 서버 관리자가 `max_allowed_packet`을 최소 64 MiB로
+  설정하고 서버를 재시작해야 합니다. 더 큰 값을 사용해야 한다면 `.env`의
+  `DB_MAX_ALLOWED_PACKET`을 변경한 뒤 컨테이너를 다시 만드십시오.
 - **데이터까지 완전히 삭제해야 함**: `make stop`은 데이터를 보존합니다. 데이터 삭제는 복구할 수
   없으므로 백업 후에만 직접 `docker compose down --volumes`를 실행합니다.
