@@ -73,6 +73,10 @@ class BotRule(Base):
     # Some devices (notably Kyocera) put identity in the mail body while the
     # counters live in an attachment. NULL keeps legacy rules on one source.
     serial_source_type: Mapped[str | None] = mapped_column(String(20))
+    # Optional filename fragments keep rules from combining unrelated files in
+    # a message that contains more than one supported attachment.
+    attachment_filename: Mapped[str | None] = mapped_column(String(500))
+    serial_attachment_filename: Mapped[str | None] = mapped_column(String(500))
     subject_keyword: Mapped[str | None] = mapped_column(String(300))
     sender_keyword: Mapped[str | None] = mapped_column(String(300))
     sample_format: Mapped[str] = mapped_column(Text, default="")
