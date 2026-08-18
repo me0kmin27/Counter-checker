@@ -20,6 +20,7 @@ from app.pop_service import (
     _create_pop_socket,
     describe_connection_error,
     fetch_account,
+    message_matches_filters,
     store_message,
 )
 from app.security import decrypt_password, encrypt_password
@@ -115,6 +116,67 @@ def test_store_and_view_mime_message(client):
     assert "8월 카운터" in detail.text
     assert "누적 카운터" in detail.text
     assert "counter.png" in detail.text
+
+
+def test_mail_filters_support_required_and_sufficient_conditions(client):
+    account = PopAccount(filter_mode="all", filter_sender="DEVICE@example.com",
+                         filter_recipient="counter@", filter_subject="monthly",
+                         filter_keyword="12,345")
+    mime = MimeMessage()
+    mime["From"] = "Device <device@example.com>"
+    mime["To"] = "counter@example.com"
+    mime["Subject"] = "Monthly counter"
+    mime["Date"] = "Tue, 18 Aug 2026 12:00:00 +0000"
+    mime.set_content("누적값 12,345")
+
+    assert message_matches_filters(account, mime.as_bytes()) is True
+    account.filter_subject = "weekly"
+    assert message_matches_filters(account, mime.as_bytes()) is False
+    account.filter_mode = "any"
+    assert message_matches_filters(account, mime.as_bytes()) is True
+
+
+def test_fetch_stores_and_deletes_only_matching_mail(client):
+    with SessionLocal() as db:
+        account = PopAccount(name="filtered", host="pop.example.com", port=995, username="u",
+                             encrypted_password=encrypt_password("p"), security_mode="ssl",
+                             use_ssl=True, delete_after_receive=True, filter_subject="wanted")
+        db.add(account)
+        db.commit()
+        wanted, rejected = MimeMessage(), MimeMessage()
+        wanted["Subject"], rejected["Subject"] = "wanted report", "newsletter"
+        wanted.set_content("one")
+        rejected.set_content("two")
+        pop_client = MagicMock()
+        pop_client.stat.return_value = (2, 0)
+        pop_client.retr.side_effect = [
+            (b"+OK", wanted.as_bytes().splitlines(), len(wanted.as_bytes())),
+            (b"+OK", rejected.as_bytes().splitlines(), len(rejected.as_bytes())),
+        ]
+        with patch("app.pop_service._IPv4PreferredPOP3SSL", return_value=pop_client):
+            assert fetch_account(db, account) == 1
+        assert db.query(EmailMessage).count() == 1
+        pop_client.dele.assert_called_once_with(1)
+
+
+def test_account_filter_form_persists_rules(client):
+    response = client.post("/settings", data={
+        "name": "filtered", "host": "pop.example.com", "port": "995",
+        "username": "user", "password": "secret", "security_mode": "ssl",
+        "filter_mode": "any", "filter_sender": "device@example.com",
+        "filter_recipient": "counter@example.com", "filter_subject": "카운터",
+        "filter_keyword": "누적", "filter_date_from": "2026-08-01",
+        "filter_date_to": "2026-08-31",
+    }, follow_redirects=False)
+    assert response.status_code == 303
+    with SessionLocal() as db:
+        account = db.query(PopAccount).one()
+        assert account.filter_mode == "any"
+        assert account.filter_subject == "카운터"
+        assert account.filter_date_from.date().isoformat() == "2026-08-01"
+    page = client.get("/settings")
+    assert "모든 조건 만족 (AND)" in page.text
+    assert "device@example.com" in page.text
 
 
 def test_store_message_retries_after_mysql_disconnect(client):

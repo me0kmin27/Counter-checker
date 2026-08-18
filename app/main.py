@@ -1,5 +1,6 @@
 import asyncio
 import os
+from datetime import datetime, time, timezone
 from contextlib import asynccontextmanager, suppress
 from urllib.parse import quote
 
@@ -45,6 +46,25 @@ def _validate_mail_options(security_mode: str, smtp_security_mode: str, smtp_aut
         raise HTTPException(422, "SMTP 인증 방법을 올바르게 선택하세요.")
     if not 1 <= smtp_port <= 65535 or not 1 <= smtp_timeout <= 300:
         raise HTTPException(422, "SMTP 포트와 타임아웃을 올바르게 입력하세요.")
+
+
+def _filter_values(mode: str, sender: str, recipient: str, subject: str, keyword: str,
+                   date_from: str, date_to: str) -> dict:
+    if mode not in {"all", "any"}:
+        raise HTTPException(422, "메일 필터 조건 방식을 올바르게 선택하세요.")
+    try:
+        start = datetime.combine(datetime.fromisoformat(date_from).date(), time.min,
+                                 tzinfo=timezone.utc) if date_from else None
+        end = datetime.combine(datetime.fromisoformat(date_to).date(), time.max,
+                               tzinfo=timezone.utc) if date_to else None
+    except ValueError:
+        raise HTTPException(422, "메일 필터 날짜를 올바르게 입력하세요.")
+    if start and end and start > end:
+        raise HTTPException(422, "필터 시작 날짜는 종료 날짜보다 늦을 수 없습니다.")
+    return {"filter_mode": mode, "filter_sender": sender.strip() or None,
+            "filter_recipient": recipient.strip() or None,
+            "filter_subject": subject.strip() or None, "filter_keyword": keyword.strip() or None,
+            "filter_date_from": start, "filter_date_to": end}
 
 
 async def poll_loop():
@@ -362,6 +382,10 @@ def add_account(
     smtp_auth_method: str = Form("same_as_pop"), smtp_username: str = Form(""),
     smtp_password: str = Form(""), enabled: bool = Form(False),
     delete_after_receive: bool = Form(False), db: Session = Depends(get_db),
+    filter_mode: str = Form("all"), filter_sender: str = Form(""),
+    filter_recipient: str = Form(""), filter_subject: str = Form(""),
+    filter_keyword: str = Form(""), filter_date_from: str = Form(""),
+    filter_date_to: str = Form(""),
 ):
     name, host, username = _validate_account(name, host, port, username)
     # Continue to accept submissions from the former SSL checkbox-only form.
@@ -380,6 +404,8 @@ def add_account(
         encrypted_smtp_password=encrypt_password(smtp_password) if smtp_password else None,
         enabled=enabled,
         delete_after_receive=delete_after_receive,
+        **_filter_values(filter_mode, filter_sender, filter_recipient, filter_subject,
+                         filter_keyword, filter_date_from, filter_date_to),
     )
     db.add(account)
     db.commit()
@@ -398,6 +424,10 @@ def update_account(
     smtp_password: str = Form(""),
     enabled: bool = Form(False), delete_after_receive: bool = Form(False),
     db: Session = Depends(get_db),
+    filter_mode: str = Form("all"), filter_sender: str = Form(""),
+    filter_recipient: str = Form(""), filter_subject: str = Form(""),
+    filter_keyword: str = Form(""), filter_date_from: str = Form(""),
+    filter_date_to: str = Form(""),
 ):
     account = db.get(PopAccount, account_id)
     if not account:
@@ -416,6 +446,11 @@ def update_account(
     account.smtp_auth_method, account.smtp_username = smtp_auth_method, smtp_username.strip() or None
     account.enabled = enabled
     account.delete_after_receive = delete_after_receive
+    for field, value in _filter_values(
+        filter_mode, filter_sender, filter_recipient, filter_subject, filter_keyword,
+        filter_date_from, filter_date_to,
+    ).items():
+        setattr(account, field, value)
     if password:
         account.encrypted_password = encrypt_password(password)
     if smtp_password:
