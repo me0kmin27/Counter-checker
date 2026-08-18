@@ -12,7 +12,7 @@ from pathlib import Path
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
-from .models import CounterReading, Device, EmailMessage, ExtractionRun, ProcessingEvent
+from .models import BotRule, CounterReading, Device, EmailMessage, ExtractionRun, ProcessingEvent
 
 
 ADAPTER_VERSION = "2"
@@ -161,7 +161,37 @@ def _extract(source: str, adapter: str, confidence: float) -> ParsedCounters:
     return ParsedCounters(adapter, serial, counters, evidence, confidence)
 
 
-def parse_counter_message(message: EmailMessage) -> ParsedCounters:
+def _custom_rule(message: EmailMessage, rules: list[BotRule]) -> ParsedCounters | None:
+    subject, sender = message.subject or "", message.sender or ""
+    for rule in rules:
+        if not rule.enabled or (rule.subject_keyword and rule.subject_keyword.casefold() not in subject.casefold()) or (rule.sender_keyword and rule.sender_keyword.casefold() not in sender.casefold()):
+            continue
+        if rule.source_type == "rtf":
+            source = "\n".join(_rtf_to_text(item.content) for item in message.attachments if item.filename.lower().endswith(".rtf") or item.mime_type in {"application/rtf", "text/rtf"})
+        elif rule.source_type == "ocr":
+            source = _ocr_images(message)
+        else:
+            source = f"{subject}\n{message.text_body}\n{html.unescape(re.sub('<[^>]+>', ' ', message.html_body))}"
+        if not source:
+            continue
+        try:
+            serial_match = re.search(rule.serial_pattern, source, re.IGNORECASE | re.MULTILINE)
+            counters = {}
+            for counter_type, pattern in (("black", rule.black_pattern), ("color", rule.color_pattern), ("total", rule.total_pattern)):
+                match = re.search(pattern, source, re.IGNORECASE | re.MULTILINE) if pattern else None
+                if match:
+                    counters[counter_type] = _number(match.group(1))
+        except (re.error, IndexError, ValueError):
+            continue
+        if serial_match or counters:
+            return ParsedCounters(f"custom-{rule.brand}", serial_match.group(1).strip() if serial_match else None, counters, source[:4000], 0.95)
+    return None
+
+
+def parse_counter_message(message: EmailMessage, rules: list[BotRule] | None = None) -> ParsedCounters:
+    custom = _custom_rule(message, rules or [])
+    if custom:
+        return custom
     attachment_text = []
     has_rtf = False
     for item in message.attachments:
@@ -199,7 +229,8 @@ def process_counter_message(db: Session, message: EmailMessage) -> ExtractionRun
         select(EmailMessage).options(selectinload(EmailMessage.attachments))
         .where(EmailMessage.id == message.id)
     )
-    parsed = parse_counter_message(message)
+    rules = db.scalars(select(BotRule).where(BotRule.enabled.is_(True)).order_by(BotRule.id)).all()
+    parsed = parse_counter_message(message, rules)
     # Ordinary inbox traffic must not pollute the extraction queue. A vendor
     # notification is actionable only when it contains at least one key field.
     if not parsed.serial_number and not parsed.counters:
