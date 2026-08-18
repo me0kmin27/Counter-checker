@@ -73,7 +73,8 @@ python3 scripts/manage.py logs --help
 - **DB가 준비되지 않음**: `python3 scripts/manage.py logs --tail 100 mariadb`에서 초기화 및 인증
   오류를 확인합니다.
 - **POP 확인 시 `Network is unreachable`**: 계정이나 비밀번호를 검사하기 전에 운영 서버에서
-  POP 서버로 가는 네트워크 경로를 찾지 못한 상태입니다. `docker compose exec web python -c
+  POP 서버로 가는 네트워크 경로를 찾지 못한 상태입니다. 애플리케이션은 IPv4 주소를 먼저
+  시도한 뒤 연결되지 않으면 IPv6 주소도 시도합니다. `docker compose exec web python -c
   "import socket; print(socket.getaddrinfo('POP호스트', 995))"`로 컨테이너의 DNS 확인 결과를
   점검하고, 호스트 및 클라우드 방화벽에서 해당 POP 포트(일반적으로 SSL은 995, 비SSL은 110)의
   외부 연결을 허용하십시오. DNS 결과가 IPv6 주소뿐인데 운영 환경이 IPv6를 지원하지 않는다면
