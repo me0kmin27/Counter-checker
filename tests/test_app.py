@@ -1,3 +1,4 @@
+import errno
 from email.message import EmailMessage as MimeMessage
 import socket
 from unittest.mock import patch
@@ -114,6 +115,15 @@ def test_pop_protocol_error_bytes_are_readable():
     import poplib
     error = describe_connection_error(poplib.error_proto(b"-ERR invalid login"))
     assert error == "POP 서버 응답: -ERR invalid login"
+
+
+def test_network_unreachable_error_explains_container_and_ipv4_checks():
+    error = describe_connection_error(OSError(errno.ENETUNREACH, "Network is unreachable"))
+
+    assert "네트워크 경로가 없습니다" in error
+    assert "Docker 컨테이너" in error
+    assert "IPv4" in error
+    assert "Errno" not in error
 
 
 def test_mailbox_search_raw_download_and_delete(client):
