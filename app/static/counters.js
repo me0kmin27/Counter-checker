@@ -151,9 +151,15 @@
   document.querySelectorAll('.anomaly-dialog').forEach(dialog => {
     const data = JSON.parse(dialog.querySelector('.counter-data').textContent);
     const inputs = dialog.querySelectorAll('input[type=month]');
-    const render = () => draw(dialog.querySelector('.anomaly-chart'), data.filter(row =>
-      (!inputs[0].value || row.month >= inputs[0].value) && (!inputs[1].value || row.month <= inputs[1].value)));
+    const period = dialog.querySelector('select[name=period_type]');
+    const render = () => {
+      const filtered = data.filter(row =>
+        (!inputs[0].value || row.month >= inputs[0].value) &&
+        (!inputs[1].value || row.month <= inputs[1].value));
+      draw(dialog.querySelector('.anomaly-chart'), summarize(filtered, period.value));
+    };
     inputs.forEach(input => input.addEventListener('change', render));
+    period.addEventListener('change', render);
     dialog.addEventListener('dialogopen', render);
   });
 })();
