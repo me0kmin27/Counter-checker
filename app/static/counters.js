@@ -1,7 +1,7 @@
 (() => {
   const series = [
-    { key: 'black_limit', label: '계약 한도 흑백', color: '#667085', dash: [7, 5] },
-    { key: 'color_limit', label: '계약 한도 컬러', color: '#8b5cf6', dash: [7, 5] },
+    { key: 'black_limit', label: '월 계약한도 흑백', color: '#667085', dash: [7, 5] },
+    { key: 'color_limit', label: '월 계약한도 컬러', color: '#8b5cf6', dash: [7, 5] },
     { key: 'black', label: '실사용량 흑백', color: '#2563eb', dash: [] },
     { key: 'color', label: '실사용량 컬러', color: '#f97316', dash: [] },
   ];
@@ -13,6 +13,21 @@
     const factor = normalized <= 1 ? 1 : normalized <= 2 ? 2 : normalized <= 5 ? 5 : 10;
     return factor * magnitude;
   };
+
+  function summarize(rows, period) {
+    const buckets = new Map();
+    rows.forEach(row => {
+      const [year, month] = row.month.split('-').map(Number);
+      let key = row.month;
+      if (period === 'quarterly') key = `${year} ${Math.ceil(month / 3)}분기`;
+      if (period === 'half') key = `${year} ${month <= 6 ? '상반기' : '하반기'}`;
+      if (period === 'yearly') key = `${year}년`;
+      const bucket = buckets.get(key) || { month: key, black: 0, color: 0, black_limit: 0, color_limit: 0 };
+      ['black', 'color', 'black_limit', 'color_limit'].forEach(field => { bucket[field] += Number(row[field]) || 0; });
+      buckets.set(key, bucket);
+    });
+    return [...buckets.values()];
+  }
 
   function draw(canvas, rows) {
     const ctx = canvas.getContext('2d');
@@ -121,21 +136,30 @@
     let index = Math.max(0, years.length - 1);
     const render = () => {
       const year = years[index] || new Date().getFullYear().toString();
-      const rows = data.filter(row => row.month.startsWith(year));
+      const period = dialog.querySelector('.usage-period').value;
+      const source = period === 'yearly' ? data : data.filter(row => row.month.startsWith(year));
+      const rows = summarize(source, period);
       dialog.querySelector('.year-label').textContent = `${year}년`;
-      dialog.querySelector('.usage-body').innerHTML = rows.map(row => `<tr><td>${row.month.slice(5)}월</td><td>${row.black_limit.toLocaleString()} / <b>${row.black.toLocaleString()}</b></td><td>${row.color_limit.toLocaleString()} / <b>${row.color.toLocaleString()}</b></td></tr>`).join('') || '<tr><td colspan="3">기록 없음</td></tr>';
+      dialog.querySelector('.usage-body').innerHTML = rows.map(row => `<tr><td>${period === 'monthly' ? `${row.month.slice(5)}월` : row.month}</td><td>${row.black_limit.toLocaleString()} / <b>${row.black.toLocaleString()}</b></td><td>${row.color_limit.toLocaleString()} / <b>${row.color.toLocaleString()}</b></td></tr>`).join('') || '<tr><td colspan="3">기록 없음</td></tr>';
       draw(dialog.querySelector('.usage-chart'), rows);
     };
     dialog.querySelector('.year-prev').onclick = () => { if (index > 0) { index--; render(); } };
     dialog.querySelector('.year-next').onclick = () => { if (index < years.length - 1) { index++; render(); } };
+    dialog.querySelector('.usage-period').addEventListener('change', render);
     dialog.addEventListener('dialogopen', render);
   });
   document.querySelectorAll('.anomaly-dialog').forEach(dialog => {
     const data = JSON.parse(dialog.querySelector('.counter-data').textContent);
     const inputs = dialog.querySelectorAll('input[type=month]');
-    const render = () => draw(dialog.querySelector('.anomaly-chart'), data.filter(row =>
-      (!inputs[0].value || row.month >= inputs[0].value) && (!inputs[1].value || row.month <= inputs[1].value)));
+    const period = dialog.querySelector('select[name=period_type]');
+    const render = () => {
+      const filtered = data.filter(row =>
+        (!inputs[0].value || row.month >= inputs[0].value) &&
+        (!inputs[1].value || row.month <= inputs[1].value));
+      draw(dialog.querySelector('.anomaly-chart'), summarize(filtered, period.value));
+    };
     inputs.forEach(input => input.addEventListener('change', render));
+    period.addEventListener('change', render);
     dialog.addEventListener('dialogopen', render);
   });
 })();
