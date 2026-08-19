@@ -54,10 +54,19 @@
     {% if device %}
     <form method="post" action="/customers/{{ organization.id }}/edit">
       <div class="dialog-title"><div><h2>거래처 정보 수정</h2><p>등록된 업체와 복합기 정보를 변경합니다.</p></div><button type="button" class="dialog-close" data-close-dialog aria-label="닫기">×</button></div>
-      {% with company_name=organization.name, model_name=device.model, serial_number=device.serial_number, phone=organization.phone, email=organization.email, started_at=device.installed_at.strftime('%Y-%m-%d') if device.installed_at else '', monthly_black_allowance=organization.monthly_black_allowance, monthly_color_allowance=organization.monthly_color_allowance, initial_black_counter=device.initial_black_counter, initial_color_counter=device.initial_color_counter %}{% include "customer_form_fields.html" %}{% endwith %}
-      <fieldset class="replacement-fields"><legend>복합기 교체 시 입력</legend><p>시리얼넘버를 변경하면 기존 장비를 종료하고 교체 이력을 남깁니다.</p><div class="form-grid"><label>교체 전 흑백 마지막카운터<input type="number" name="previous_final_black_counter" min="0" value="0"></label><label>교체 전 컬러 마지막카운터<input type="number" name="previous_final_color_counter" min="0" value="0"></label></div></fieldset>
-      {% if organization.counter_resolutions %}<section class="resolution-history"><h3>카운터 이상 처리 이력</h3>{% for resolution in organization.counter_resolutions|sort(attribute='created_at', reverse=true) %}<div><b>{{ resolution.period_start }} ~ {{ resolution.period_end }} · {{ {'monthly':'월별','quarterly':'분기별','half':'반기별','yearly':'연별'}[resolution.period_type] }}</b><span>{{ resolution.action_note }}</span><small>{{ resolution.reviewer }} · {{ resolution.created_at.strftime('%Y-%m-%d %H:%M') }}</small></div>{% endfor %}</section>{% endif %}
-      {% if organization.sites[0].replacements %}<section class="replacement-history"><h3>복합기 교체 이력</h3>{% for replacement in organization.sites[0].replacements|reverse %}<div><b>{{ replacement.replaced_at.strftime('%Y-%m-%d') }}</b><span>{{ replacement.previous_device.model or '-' }} ({{ replacement.previous_device.serial_number }}) → {{ replacement.new_device.model or '-' }} ({{ replacement.new_device.serial_number }})</span><small>교체 전 마지막 흑백/컬러 {{ '{:,}'.format(replacement.previous_final_black_counter) }} / {{ '{:,}'.format(replacement.previous_final_color_counter) }} · 교체 후 시작 {{ '{:,}'.format(replacement.new_initial_black_counter) }} / {{ '{:,}'.format(replacement.new_initial_color_counter) }}</small></div>{% endfor %}</section>{% endif %}
+      <div class="customer-management-grid">
+        <section class="management-card edit-card"><div class="management-card-title"><h3>거래처 정보 수정</h3><p>업체 및 현재 복합기 정보를 관리합니다.</p></div>
+          {% with company_name=organization.name, model_name=device.model, serial_number=device.serial_number, phone=organization.phone, email=organization.email, started_at=device.installed_at.strftime('%Y-%m-%d') if device.installed_at else '', monthly_black_allowance=organization.monthly_black_allowance, monthly_color_allowance=organization.monthly_color_allowance, initial_black_counter=device.initial_black_counter, initial_color_counter=device.initial_color_counter %}{% include "customer_form_fields.html" %}{% endwith %}
+          <fieldset class="replacement-fields"><legend>복합기 교체 시 입력</legend><p>시리얼넘버를 변경하면 기존 장비를 종료하고 교체 이력을 남깁니다.</p><div class="form-grid"><label>교체 전 흑백 마지막카운터<input type="number" name="previous_final_black_counter" min="0" value="0"></label><label>교체 전 컬러 마지막카운터<input type="number" name="previous_final_color_counter" min="0" value="0"></label></div></fieldset>
+        </section>
+        <section class="management-card history-card" data-history-list><div class="management-card-title"><h3>이력 관리</h3><p>카운터 이상 처리 및 복합기 교체 이력을 확인합니다.</p></div>
+          <div class="management-history">
+          {% for resolution in organization.counter_resolutions|sort(attribute='created_at', reverse=true) %}<article data-history-item><span class="history-kind counter">카운터 이상 처리 이력</span><b>{{ resolution.period_start }} ~ {{ resolution.period_end }} · {{ {'monthly':'월별','quarterly':'분기별','half':'반기별','yearly':'연별'}[resolution.period_type] }}</b><p>{{ resolution.action_note }}</p><small>{{ resolution.reviewer }} · {{ resolution.created_at.strftime('%Y-%m-%d %H:%M') }}</small></article>{% endfor %}
+          {% for replacement in organization.sites[0].replacements|reverse %}<article data-history-item><span class="history-kind device">복합기 교체 이력</span><b>{{ replacement.replaced_at.strftime('%Y-%m-%d') }}</b><p>{{ replacement.previous_device.model or '-' }} ({{ replacement.previous_device.serial_number }}) → {{ replacement.new_device.model or '-' }} ({{ replacement.new_device.serial_number }})</p><small>교체 전 흑백/컬러 {{ '{:,}'.format(replacement.previous_final_black_counter) }} / {{ '{:,}'.format(replacement.previous_final_color_counter) }} · 교체 후 {{ '{:,}'.format(replacement.new_initial_black_counter) }} / {{ '{:,}'.format(replacement.new_initial_color_counter) }}</small></article>{% endfor %}
+          {% if not organization.counter_resolutions and not organization.sites[0].replacements %}<div class="history-empty">등록된 처리 이력이 없습니다.</div>{% endif %}
+          </div><nav class="history-pagination" aria-label="관리 이력 페이지" hidden><button class="button ghost history-prev" type="button">이전</button><span><b class="history-current">1</b> / <span class="history-total">1</span></span><button class="button ghost history-next" type="button">다음</button></nav>
+        </section>
+      </div>
       <div class="dialog-actions"><button class="button danger dialog-delete" type="submit" formaction="/customers/{{ organization.id }}/delete" onclick="return confirm('‘{{ organization.name }}’ 거래처를 삭제하시겠습니까?')">거래처 삭제</button><span class="dialog-action-spacer"></span><button class="button ghost" type="button" data-close-dialog>취소</button><button class="button primary compact" type="submit">저장</button></div>
     </form>
     {% else %}
@@ -72,5 +81,23 @@
 document.querySelectorAll('[data-open-dialog]').forEach((button) => button.addEventListener('click', () => document.getElementById(button.dataset.openDialog).showModal()));
 document.querySelectorAll('[data-close-dialog]').forEach((button) => button.addEventListener('click', () => button.closest('dialog').close()));
 document.querySelectorAll('dialog').forEach((dialog) => dialog.addEventListener('click', (event) => { if (event.target === dialog) dialog.close(); }));
+document.querySelectorAll('[data-history-list]').forEach((list) => {
+  const items = [...list.querySelectorAll('[data-history-item]')];
+  const pagination = list.querySelector('.history-pagination');
+  const pageSize = 12;
+  const totalPages = Math.max(1, Math.ceil(items.length / pageSize));
+  let page = 1;
+  const render = () => {
+    items.forEach((item, index) => { item.hidden = index < (page - 1) * pageSize || index >= page * pageSize; });
+    list.querySelector('.history-current').textContent = page;
+    list.querySelector('.history-total').textContent = totalPages;
+    list.querySelector('.history-prev').disabled = page === 1;
+    list.querySelector('.history-next').disabled = page === totalPages;
+  };
+  pagination.hidden = items.length <= pageSize;
+  list.querySelector('.history-prev').addEventListener('click', () => { page = Math.max(1, page - 1); render(); });
+  list.querySelector('.history-next').addEventListener('click', () => { page = Math.min(totalPages, page + 1); render(); });
+  render();
+});
 </script>
 {% endblock %}
