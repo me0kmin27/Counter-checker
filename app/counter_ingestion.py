@@ -294,9 +294,6 @@ def _custom_rule(message: EmailMessage, rules: list[BotRule]) -> ParsedCounters 
 
 
 def parse_counter_message(message: EmailMessage, rules: list[BotRule] | None = None) -> ParsedCounters:
-    custom = _custom_rule(message, rules or [])
-    if custom:
-        return custom
     attachment_text = []
     has_rtf = False
     for item in message.attachments:
@@ -306,6 +303,15 @@ def parse_counter_message(message: EmailMessage, rules: list[BotRule] | None = N
 
     subject_and_body = f"{message.subject}\n{message.text_body}\n{html.unescape(re.sub('<[^>]+>', ' ', message.html_body))}\n{_html_attachments(message)}"
     probe = subject_and_body.casefold()
+    # Sindoh's bracketed field names are an unambiguous vendor signature.  Read
+    # them before operator-defined rules: a broad Kyocera/Samsung rule (for
+    # example, one without a subject filter) must not claim a Sindoh message
+    # merely because it can find its serial number.
+    if "[serial number]" in probe or "[total counter]" in probe:
+        return _sindoh(subject_and_body)
+    custom = _custom_rule(message, rules or [])
+    if custom:
+        return custom
     if has_rtf or "samsung" in probe or "삼성" in probe:
         return _extract("\n".join([subject_and_body, *attachment_text]), "samsung-rtf", 0.98)
     if "meterdate" in probe or "counters by function" in probe or "kyocera" in probe or "교세라" in probe:
@@ -323,8 +329,6 @@ def parse_counter_message(message: EmailMessage, rules: list[BotRule] | None = N
             "kyocera-ocr", parsed.serial_number or ocr.serial_number, counters,
             f"{parsed.evidence}\n{ocr.evidence}"[:4000], 0.80, parsed.captured_at,
         )
-    if "[serial number]" in probe or "[total counter]" in probe:
-        return _sindoh(subject_and_body)
     return _extract(subject_and_body, "sindoh-plain", 0.99)
 
 
