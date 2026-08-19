@@ -580,6 +580,34 @@ def delete_customer(organization_id: int, db: Session = Depends(get_db)):
     return RedirectResponse("/customers?notice=" + quote("거래처를 삭제했습니다."), 303)
 
 
+@app.post("/customers/{organization_id}/history/counter/{resolution_id}/delete")
+def delete_counter_resolution(organization_id: int, resolution_id: int,
+                              db: Session = Depends(get_db)):
+    resolution = db.scalar(select(CounterResolution).where(
+        CounterResolution.id == resolution_id,
+        CounterResolution.organization_id == organization_id,
+    ))
+    if not resolution:
+        raise HTTPException(404, "카운터 이상 처리 이력을 찾을 수 없습니다.")
+    db.delete(resolution)
+    db.commit()
+    return RedirectResponse("/customers?notice=" + quote("카운터 이상 처리 이력을 삭제했습니다."), 303)
+
+
+@app.post("/customers/{organization_id}/history/replacement/{replacement_id}/delete")
+def delete_device_replacement(organization_id: int, replacement_id: int,
+                              db: Session = Depends(get_db)):
+    replacement = db.scalar(select(DeviceReplacement).join(Site).where(
+        DeviceReplacement.id == replacement_id,
+        Site.organization_id == organization_id,
+    ))
+    if not replacement:
+        raise HTTPException(404, "복합기 교체 이력을 찾을 수 없습니다.")
+    db.delete(replacement)
+    db.commit()
+    return RedirectResponse("/customers?notice=" + quote("복합기 교체 이력을 삭제했습니다."), 303)
+
+
 @app.get("/counters/{reading_id}", response_class=HTMLResponse)
 def counter_detail(reading_id: int, request: Request, db: Session = Depends(get_db)):
     reading = db.scalar(

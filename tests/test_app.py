@@ -12,8 +12,8 @@ from sqlalchemy.schema import CreateTable
 
 from app.database import SessionLocal
 from app.models import (
-    Attachment, CounterReading, Device, EmailMessage, ExtractionRun, Organization, PopAccount, Site,
-    User,
+    Attachment, CounterReading, CounterResolution, Device, DeviceReplacement, EmailMessage,
+    ExtractionRun, Organization, PopAccount, Site, User,
 )
 from app.pop_service import (
     MAX_POP_LINE_BYTES,
@@ -476,6 +476,7 @@ def test_customer_device_replacement_preserves_counter_handover_history(client):
         organization = db.get(Organization, organization_id)
         devices = sorted(organization.sites[0].devices, key=lambda item: item.id)
         replacement = organization.sites[0].replacements[0]
+        replacement_id = replacement.id
         assert devices[0].retired_at.strftime("%Y-%m-%d") == "2026-08-18"
         assert (devices[1].serial_number, devices[1].initial_black_counter,
                 devices[1].initial_color_counter) == ("NEW-1", 100, 200)
@@ -483,6 +484,45 @@ def test_customer_device_replacement_preserves_counter_handover_history(client):
                 replacement.previous_final_color_counter) == (9100, 2200)
     page = client.get("/customers")
     assert all(value in page.text for value in ("복합기 교체 이력", "OLD-1", "NEW-1", "9,100", "2,200"))
+    assert f"/customers/{organization_id}/history/replacement/{replacement_id}/delete" in page.text
+
+    response = client.post(
+        f"/customers/{organization_id}/history/replacement/{replacement_id}/delete",
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    with SessionLocal() as db:
+        assert db.query(DeviceReplacement).count() == 0
+        assert db.query(Device).count() == 2
+
+
+def test_customer_counter_resolution_history_can_be_deleted(client):
+    with SessionLocal() as db:
+        organization = Organization(name="이력 업체", phone="02-1111-2222", email="history@example.com")
+        site = Site(name="기본 사업장")
+        site.devices.append(Device(brand="미지정", model="History MFP", serial_number="HISTORY-1",
+                                   normalized_serial="HISTORY-1"))
+        organization.sites.append(site)
+        db.add(organization)
+        db.commit()
+        organization_id = organization.id
+
+    response = client.post(f"/counters/{organization_id}/resolve", data={
+        "period_start": "2026-07", "period_end": "2026-07",
+        "period_type": "monthly", "action_note": "초과분 정산 완료",
+    }, follow_redirects=False)
+    assert response.status_code == 303
+    with SessionLocal() as db:
+        resolution_id = db.query(CounterResolution.id).scalar()
+
+    page = client.get("/customers")
+    delete_path = f"/customers/{organization_id}/history/counter/{resolution_id}/delete"
+    assert delete_path in page.text and "초과분 정산 완료" in page.text
+    assert client.post(delete_path, follow_redirects=False).status_code == 303
+    with SessionLocal() as db:
+        assert db.query(CounterResolution).count() == 0
+
+    assert client.post(delete_path, follow_redirects=False).status_code == 404
 
 
 def test_counter_workspace_filters_by_company_and_period(client):
