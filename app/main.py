@@ -16,8 +16,8 @@ from sqlalchemy.orm import Session, selectinload
 
 from .database import Base, SessionLocal, engine, ensure_compatibility_schema, get_db
 from .models import (
-    Attachment, BotRule, CounterReading, Device, DeviceReplacement, EmailMessage, ExtractionRun, Organization,
-    PopAccount, ProcessingEvent, Site, User,
+    Attachment, BotRule, CounterReading, CounterResolution, Device, DeviceReplacement, EmailMessage,
+    ExtractionRun, Organization, PopAccount, ProcessingEvent, Site, User,
 )
 from .pop_service import fetch_account
 from .counter_ingestion import attachment_to_text, process_counter_message
@@ -324,63 +324,98 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
 
 
 @app.get("/counters", response_class=HTMLResponse)
-def counter_workspace(request: Request, organization_id: str = "", months: int = 3,
-                      db: Session = Depends(get_db)):
-    """Expose the counter-analysis domain that is already persisted by the application."""
-    counts = {
-        "organizations": db.scalar(select(func.count()).select_from(Organization)) or 0,
-        "sites": db.scalar(select(func.count()).select_from(Site)) or 0,
-        "devices": db.scalar(select(func.count()).select_from(Device)) or 0,
-        "readings": db.scalar(select(func.count()).select_from(CounterReading)) or 0,
-    }
-    pending = db.scalar(
-        select(func.count()).select_from(CounterReading)
-        .where(CounterReading.status == "needs_review")
-    ) or 0
-    if months not in {3, 6, 12}:
+def counter_workspace(request: Request, q: str = Query("", max_length=200),
+                      page: int = Query(1, ge=1), organization_id: str = "",
+                      months: int | None = None, db: Session = Depends(get_db)):
+    if months is not None and months not in {3, 6, 12}:
         raise HTTPException(422, "조회 기간은 최근 3개월, 6개월 또는 12개월이어야 합니다.")
-    selected_organization_id = int(organization_id) if organization_id.isdigit() else None
-    cutoff = _months_ago(datetime.now(timezone.utc), months)
-    reading_query = select(CounterReading).join(CounterReading.device).join(Device.site).where(
-        CounterReading.captured_at >= cutoff
-    )
-    if selected_organization_id is not None:
-        reading_query = reading_query.where(Site.organization_id == selected_organization_id)
-    readings = db.scalars(
-        reading_query.options(
-            selectinload(CounterReading.device).selectinload(Device.site)
-            .selectinload(Site.organization),
-            selectinload(CounterReading.run),
-        ).order_by(CounterReading.captured_at.desc())
-    ).all()
-    devices = db.scalars(
-        select(Device).options(
-            selectinload(Device.site).selectinload(Site.organization),
-            selectinload(Device.readings),
-        ).order_by(Device.id.desc()).limit(20)
-    ).all()
-    runs = db.scalars(
-        select(ExtractionRun).order_by(ExtractionRun.created_at.desc()).limit(10)
-    ).all()
-    events = db.scalars(
-        select(ProcessingEvent).order_by(ProcessingEvent.created_at.desc()).limit(10)
-    ).all()
-    organizations = db.scalars(select(Organization).order_by(Organization.name)).all()
-    monthly = {}
-    for reading in readings:
-        key = (reading.captured_at.strftime("%Y-%m"), reading.device.site.organization.name)
-        summary = monthly.setdefault(key, {"month": key[0], "organization": key[1],
-                                           "count": 0, "latest_value": 0})
-        summary["count"] += 1
-        summary["latest_value"] = max(summary["latest_value"], reading.value)
-    monthly_rows = sorted(monthly.values(), key=lambda row: (row["month"], row["organization"]),
-                          reverse=True)
+    per_page, search = 30, q.strip()
+    query = select(Organization).options(
+        selectinload(Organization.sites).selectinload(Site.devices)
+        .selectinload(Device.readings).selectinload(CounterReading.run),
+        selectinload(Organization.counter_resolutions),
+    ).order_by(Organization.name, Organization.id)
+    count_query = select(func.count()).select_from(Organization)
+    if search:
+        condition = Organization.name.ilike(f"%{search}%")
+        query, count_query = query.where(condition), count_query.where(condition)
+    if organization_id.isdigit():
+        condition = Organization.id == int(organization_id)
+        query, count_query = query.where(condition), count_query.where(condition)
+    total = db.scalar(count_query) or 0
+    total_pages = max(1, (total + per_page - 1) // per_page)
+    page = min(page, total_pages)
+    organizations = db.scalars(query.offset((page - 1) * per_page).limit(per_page)).all()
+    rows = []
+    for organization in organizations:
+        history = _organization_counter_data(organization)
+        def is_resolved(month: str) -> bool:
+            return any(resolution.period_start <= month <= resolution.period_end
+                       for resolution in organization.counter_resolutions)
+        abnormal = next((item for item in reversed(history)
+                         if item["over"] and not is_resolved(item["month"])), None)
+        rows.append({"organization": organization, "history": history,
+                     "latest": history[-1] if history else None, "abnormal": abnormal})
     return templates.TemplateResponse(request, "counters.html", {
-        "counts": counts, "pending": pending, "readings": readings,
-        "devices": devices, "runs": runs, "events": events, "organizations": organizations,
-        "organization_id": selected_organization_id, "months": months,
-        "monthly_rows": monthly_rows,
+        "rows": rows, "q": search, "page": page, "total": total,
+        "total_pages": total_pages, "notice": request.query_params.get("notice"),
     })
+
+
+def _organization_counter_data(organization: Organization) -> list[dict]:
+    """Convert cumulative device readings into organization-level monthly usage."""
+    months: dict[str, dict] = {}
+    for site in organization.sites:
+        for device in site.devices:
+            by_type: dict[str, list[CounterReading]] = {}
+            has_separate_counters = any(
+                reading.counter_type.lower() in {"black", "color"}
+                or reading.counter_type in {"흑백", "컬러"}
+                for reading in device.readings
+            )
+            for reading in device.readings:
+                label = reading.counter_type.lower()
+                if has_separate_counters and label in {"total", "총카운터"}:
+                    continue
+                kind = "color" if "color" in label or "컬러" in label else "black"
+                by_type.setdefault(kind, []).append(reading)
+            for kind, readings in by_type.items():
+                previous = device.initial_color_counter if kind == "color" else device.initial_black_counter
+                for reading in sorted(readings, key=lambda item: (item.captured_at, item.id)):
+                    month = reading.captured_at.strftime("%Y-%m")
+                    row = months.setdefault(month, {"month": month, "black": 0, "color": 0,
+                                                     "email_id": reading.run.email_id})
+                    row[kind] += max(0, reading.value - previous)
+                    previous = reading.value
+                    row["email_id"] = reading.run.email_id
+    result = []
+    for month in sorted(months):
+        row = months[month]
+        row.update({"black_limit": organization.monthly_black_allowance,
+                    "color_limit": organization.monthly_color_allowance})
+        row["over"] = (max(0, row["black"] - row["black_limit"]) +
+                       max(0, row["color"] - row["color_limit"]))
+        result.append(row)
+    return result
+
+
+@app.post("/counters/{organization_id}/resolve")
+def resolve_counter(organization_id: int, request: Request, period_start: str = Form(...),
+                    period_end: str = Form(...), period_type: str = Form(...),
+                    action_note: str = Form(...), db: Session = Depends(get_db)):
+    organization = db.get(Organization, organization_id)
+    if not organization:
+        raise HTTPException(404, "거래처를 찾을 수 없습니다.")
+    valid_months = re.fullmatch(r"\d{4}-\d{2}", period_start) and re.fullmatch(r"\d{4}-\d{2}", period_end)
+    if period_type not in {"monthly", "quarterly", "half", "yearly"} or not valid_months:
+        raise HTTPException(422, "확인 기간을 올바르게 선택하세요.")
+    if period_start > period_end or not action_note.strip():
+        raise HTTPException(422, "처리 기간과 작업 내용을 입력하세요.")
+    db.add(CounterResolution(organization=organization, period_start=period_start,
+                             period_end=period_end, period_type=period_type,
+                             action_note=action_note.strip(), reviewer=request.state.user.display_name))
+    db.commit()
+    return RedirectResponse("/counters?notice=" + quote("이상 사용 확인 및 처리 내역을 저장했습니다."), 303)
 
 
 @app.get("/customers", response_class=HTMLResponse)
@@ -405,7 +440,8 @@ def customers(request: Request, q: str = Query("", max_length=200),
     total_pages = max(1, (total + per_page - 1) // per_page)
     page = min(page, total_pages)
     query = select(Organization).options(
-        selectinload(Organization.sites).selectinload(Site.devices)
+        selectinload(Organization.sites).selectinload(Site.devices),
+        selectinload(Organization.counter_resolutions),
     ).order_by(Organization.name, Organization.id)
     if filters:
         query = query.where(*filters)
