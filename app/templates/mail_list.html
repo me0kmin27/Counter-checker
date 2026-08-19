@@ -12,9 +12,11 @@
     <button class="button ghost">검색</button>{% if q or account_id %}<a class="button ghost" href="/mail">초기화</a>{% endif %}
   </form>
   {% if messages %}
-  <form id="bulk-delete-form" method="post" action="/mail/bulk-delete">
+  <form id="bulk-mail-form" method="post" action="/mail/bulk-delete">
     <div class="mail-actions"><span id="selection-count" aria-live="polite">선택된 메일 0건</span><div>
-      <button class="button danger" name="scope" value="selected" data-confirm="선택한 메일을 삭제할까요?" disabled>선택 삭제</button>
+      <button class="button ghost selected-action" formaction="/mail/bulk-extract" name="scope" value="selected" data-confirm="선택한 메일에서 카운터를 일괄 추출할까요?" disabled>선택 카운터 추출</button>
+      <button class="button ghost" formaction="/mail/bulk-extract" name="scope" value="all" data-confirm="메일함의 모든 메일에서 카운터를 추출할까요?">전체 카운터 추출</button>
+      <button class="button danger selected-action" name="scope" value="selected" data-confirm="선택한 메일을 삭제할까요?" disabled>선택 삭제</button>
       <button class="button danger" name="scope" value="all" data-confirm="메일함의 모든 메일을 삭제할까요? 이 작업은 되돌릴 수 없습니다.">전체 삭제</button>
     </div></div>
     <div class="table-wrap"><table>
@@ -26,16 +28,16 @@
   {% else %}<div class="empty"><b>조건에 맞는 메일이 없습니다.</b><span>검색 조건을 바꾸거나 POP 설정에서 메일을 받아보세요.</span></div>{% endif %}
 </section>
 <script>
-  const bulkForm = document.querySelector('#bulk-delete-form');
+  const bulkForm = document.querySelector('#bulk-mail-form');
   if (bulkForm) {
     const checkboxes = [...bulkForm.querySelectorAll('.mail-checkbox')];
     const selectAll = bulkForm.querySelector('#select-all');
-    const selectedButton = bulkForm.querySelector('[value="selected"]');
+    const selectedButtons = [...bulkForm.querySelectorAll('.selected-action')];
     const selectionCount = bulkForm.querySelector('#selection-count');
     const updateSelection = () => {
       const count = checkboxes.filter((checkbox) => checkbox.checked).length;
       selectionCount.textContent = `선택된 메일 ${count}건`;
-      selectedButton.disabled = count === 0;
+      selectedButtons.forEach((button) => { button.disabled = count === 0; });
       selectAll.checked = count === checkboxes.length;
       selectAll.indeterminate = count > 0 && count < checkboxes.length;
     };
