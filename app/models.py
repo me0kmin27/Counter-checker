@@ -139,6 +139,24 @@ class Organization(Base):
     monthly_black_allowance: Mapped[int] = mapped_column(BigInteger, default=0)
     monthly_color_allowance: Mapped[int] = mapped_column(BigInteger, default=0)
     sites: Mapped[list["Site"]] = relationship(back_populates="organization", cascade="all, delete-orphan")
+    counter_resolutions: Mapped[list["CounterResolution"]] = relationship(
+        back_populates="organization", cascade="all, delete-orphan"
+    )
+
+
+class CounterResolution(Base):
+    """Operator record explaining how an organization's overage was handled."""
+    __tablename__ = "counter_resolutions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    organization_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    period_start: Mapped[str] = mapped_column(String(7))
+    period_end: Mapped[str] = mapped_column(String(7))
+    period_type: Mapped[str] = mapped_column(String(20), default="monthly")
+    action_note: Mapped[str] = mapped_column(Text)
+    reviewer: Mapped[str] = mapped_column(String(200))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    organization: Mapped[Organization] = relationship(back_populates="counter_resolutions")
 
 
 class Site(Base):
