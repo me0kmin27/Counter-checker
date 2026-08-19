@@ -367,6 +367,9 @@ def test_counter_domain_is_visible_on_website(client):
     page = client.get("/counters")
     assert page.status_code == 200
     assert all(text in page.text for text in ("웹 고객사", "Acme C200", "54,321", "검토 필요"))
+    assert all(text in page.text for text in (
+        "계약 한도 흑백", "계약 한도 컬러", "실사용량 흑백", "실사용량 컬러", "꺾은선그래프",
+    ))
     detail = client.get(f"/counters/{reading_id}")
     assert detail.status_code == 200
     assert all(text in detail.text for text in ("부산 지점", "TOTAL 54321", "counter-parser"))

@@ -1,21 +1,141 @@
 (() => {
-  const colors = { limit: '#aeb8ca', actual: '#3563e9', over: '#e5484d' };
+  const series = [
+    { key: 'black_limit', label: '계약 한도 흑백', color: '#667085', dash: [7, 5] },
+    { key: 'color_limit', label: '계약 한도 컬러', color: '#8b5cf6', dash: [7, 5] },
+    { key: 'black', label: '실사용량 흑백', color: '#2563eb', dash: [] },
+    { key: 'color', label: '실사용량 컬러', color: '#f97316', dash: [] },
+  ];
+
+  const niceStep = (range, ticks = 5) => {
+    const rough = Math.max(range / ticks, 1);
+    const magnitude = 10 ** Math.floor(Math.log10(rough));
+    const normalized = rough / magnitude;
+    const factor = normalized <= 1 ? 1 : normalized <= 2 ? 2 : normalized <= 5 ? 5 : 10;
+    return factor * magnitude;
+  };
+
   function draw(canvas, rows) {
-    const ctx = canvas.getContext('2d'), ratio = devicePixelRatio || 1;
-    const width = canvas.clientWidth || 520, height = Number(canvas.getAttribute('height')) || 240;
-    canvas.width = width * ratio; canvas.height = height * ratio; ctx.scale(ratio, ratio);
+    const ctx = canvas.getContext('2d');
+    const ratio = window.devicePixelRatio || 1;
+    const width = canvas.clientWidth || 520;
+    const height = Number(canvas.getAttribute('height')) || 240;
+    canvas.width = width * ratio;
+    canvas.height = height * ratio;
+    ctx.scale(ratio, ratio);
     ctx.clearRect(0, 0, width, height);
-    if (!rows.length) { ctx.fillStyle='#667085'; ctx.fillText('선택 기간의 카운터 기록이 없습니다.', 20, 40); return; }
-    const max = Math.max(...rows.map(r => Math.max(r.black_limit + r.color_limit, r.black + r.color)), 1);
-    const left=42, bottom=34, top=18, plotH=height-bottom-top, groupW=(width-left-12)/rows.length, barW=Math.min(18, groupW/3);
-    ctx.font='10px sans-serif'; ctx.textAlign='center';
-    rows.forEach((r,i) => { const x=left+i*groupW+groupW/2, values=[r.black_limit+r.color_limit,r.black+r.color,r.over];
-      values.forEach((v,j)=>{const h=v/max*plotH;ctx.fillStyle=[colors.limit,colors.actual,colors.over][j];ctx.fillRect(x+(j-1)*barW-barW/2,top+plotH-h,barW,h)});
-      ctx.fillStyle='#667085'; ctx.fillText(r.month.slice(5),x,height-12);
+
+    if (!rows.length) {
+      ctx.fillStyle = '#667085';
+      ctx.font = '12px sans-serif';
+      ctx.fillText('선택 기간의 카운터 기록이 없습니다.', 20, 40);
+      return;
+    }
+
+    const values = rows.flatMap(row => series.map(item => Number(row[item.key]) || 0));
+    const dataMin = Math.min(...values);
+    const dataMax = Math.max(...values);
+    const padding = Math.max((dataMax - dataMin) * 0.1, dataMax * 0.05, 1);
+    const step = niceStep((dataMax - dataMin) + padding * 2);
+    const axisMin = Math.max(0, Math.floor((dataMin - padding) / step) * step);
+    let axisMax = Math.ceil((dataMax + padding) / step) * step;
+    if (axisMax <= axisMin) axisMax = axisMin + step;
+
+    const left = 68;
+    const right = 16;
+    const top = 18;
+    const bottom = 48;
+    const plotWidth = Math.max(width - left - right, 1);
+    const plotHeight = height - top - bottom;
+    const y = value => top + ((axisMax - value) / (axisMax - axisMin)) * plotHeight;
+    const x = index => left + (rows.length === 1 ? plotWidth / 2 : index * plotWidth / (rows.length - 1));
+
+    ctx.font = '10px sans-serif';
+    ctx.lineWidth = 1;
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'middle';
+    for (let tick = axisMin; tick <= axisMax + step / 2; tick += step) {
+      const tickY = y(tick);
+      ctx.strokeStyle = '#e6eaf0';
+      ctx.beginPath();
+      ctx.moveTo(left, tickY);
+      ctx.lineTo(width - right, tickY);
+      ctx.stroke();
+      ctx.fillStyle = '#667085';
+      ctx.fillText(Math.round(tick).toLocaleString(), left - 8, tickY);
+    }
+
+    const labelEvery = Math.max(1, Math.ceil(rows.length / Math.max(2, Math.floor(plotWidth / 48))));
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    rows.forEach((row, index) => {
+      if (index % labelEvery === 0 || index === rows.length - 1) {
+        ctx.fillStyle = '#667085';
+        ctx.fillText(row.month, x(index), height - bottom + 10);
+      }
     });
+
+    series.forEach(item => {
+      ctx.strokeStyle = item.color;
+      ctx.fillStyle = item.color;
+      ctx.lineWidth = 2;
+      ctx.lineJoin = 'round';
+      ctx.setLineDash(item.dash);
+      ctx.beginPath();
+      rows.forEach((row, index) => {
+        const pointX = x(index);
+        const pointY = y(Number(row[item.key]) || 0);
+        if (index === 0) ctx.moveTo(pointX, pointY);
+        else ctx.lineTo(pointX, pointY);
+      });
+      ctx.stroke();
+      ctx.setLineDash([]);
+      rows.forEach((row, index) => {
+        ctx.beginPath();
+        ctx.arc(x(index), y(Number(row[item.key]) || 0), 2.5, 0, Math.PI * 2);
+        ctx.fill();
+      });
+    });
+
+    ctx.save();
+    ctx.translate(13, top + plotHeight / 2);
+    ctx.rotate(-Math.PI / 2);
+    ctx.fillStyle = '#475467';
+    ctx.font = '11px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('사용량', 0, 0);
+    ctx.restore();
   }
-  document.querySelectorAll('[data-open]').forEach(b=>b.addEventListener('click',()=>{const d=document.getElementById(b.dataset.open);d.showModal();d.dispatchEvent(new Event('dialogopen'));}));
-  document.querySelectorAll('.counter-dialog').forEach(d=>{d.querySelectorAll('.dialog-close,.dialog-cancel').forEach(b=>b.addEventListener('click',()=>d.close()));d.addEventListener('click',e=>{if(e.target===d)d.close()});});
-  document.querySelectorAll('.counter-dialog:not(.anomaly-dialog)').forEach(d=>{const data=JSON.parse(d.querySelector('.counter-data').textContent),years=[...new Set(data.map(r=>r.month.slice(0,4)))];let index=Math.max(0,years.length-1);const render=()=>{const year=years[index]||new Date().getFullYear().toString(),rows=data.filter(r=>r.month.startsWith(year));d.querySelector('.year-label').textContent=year+'년';d.querySelector('.usage-body').innerHTML=rows.map(r=>`<tr><td>${r.month.slice(5)}월</td><td>${r.black_limit.toLocaleString()} / <b>${r.black.toLocaleString()}</b></td><td>${r.color_limit.toLocaleString()} / <b>${r.color.toLocaleString()}</b></td></tr>`).join('')||'<tr><td colspan="3">기록 없음</td></tr>';draw(d.querySelector('.usage-chart'),rows)};d.querySelector('.year-prev').onclick=()=>{if(index>0){index--;render()}};d.querySelector('.year-next').onclick=()=>{if(index<years.length-1){index++;render()}};d.addEventListener('dialogopen',render);});
-  document.querySelectorAll('.anomaly-dialog').forEach(d=>{const data=JSON.parse(d.querySelector('.counter-data').textContent),inputs=d.querySelectorAll('input[type=month]');const render=()=>draw(d.querySelector('.anomaly-chart'),data.filter(r=>(!inputs[0].value||r.month>=inputs[0].value)&&(!inputs[1].value||r.month<=inputs[1].value)));inputs.forEach(i=>i.addEventListener('change',render));d.addEventListener('dialogopen',render);});
+
+  document.querySelectorAll('[data-open]').forEach(button => button.addEventListener('click', () => {
+    const dialog = document.getElementById(button.dataset.open);
+    dialog.showModal();
+    dialog.dispatchEvent(new Event('dialogopen'));
+  }));
+  document.querySelectorAll('.counter-dialog').forEach(dialog => {
+    dialog.querySelectorAll('.dialog-close,.dialog-cancel').forEach(button => button.addEventListener('click', () => dialog.close()));
+    dialog.addEventListener('click', event => { if (event.target === dialog) dialog.close(); });
+  });
+  document.querySelectorAll('.counter-dialog:not(.anomaly-dialog)').forEach(dialog => {
+    const data = JSON.parse(dialog.querySelector('.counter-data').textContent);
+    const years = [...new Set(data.map(row => row.month.slice(0, 4)))];
+    let index = Math.max(0, years.length - 1);
+    const render = () => {
+      const year = years[index] || new Date().getFullYear().toString();
+      const rows = data.filter(row => row.month.startsWith(year));
+      dialog.querySelector('.year-label').textContent = `${year}년`;
+      dialog.querySelector('.usage-body').innerHTML = rows.map(row => `<tr><td>${row.month.slice(5)}월</td><td>${row.black_limit.toLocaleString()} / <b>${row.black.toLocaleString()}</b></td><td>${row.color_limit.toLocaleString()} / <b>${row.color.toLocaleString()}</b></td></tr>`).join('') || '<tr><td colspan="3">기록 없음</td></tr>';
+      draw(dialog.querySelector('.usage-chart'), rows);
+    };
+    dialog.querySelector('.year-prev').onclick = () => { if (index > 0) { index--; render(); } };
+    dialog.querySelector('.year-next').onclick = () => { if (index < years.length - 1) { index++; render(); } };
+    dialog.addEventListener('dialogopen', render);
+  });
+  document.querySelectorAll('.anomaly-dialog').forEach(dialog => {
+    const data = JSON.parse(dialog.querySelector('.counter-data').textContent);
+    const inputs = dialog.querySelectorAll('input[type=month]');
+    const render = () => draw(dialog.querySelector('.anomaly-chart'), data.filter(row =>
+      (!inputs[0].value || row.month >= inputs[0].value) && (!inputs[1].value || row.month <= inputs[1].value)));
+    inputs.forEach(input => input.addEventListener('change', render));
+    dialog.addEventListener('dialogopen', render);
+  });
 })();
