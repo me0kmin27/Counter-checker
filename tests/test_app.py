@@ -839,6 +839,53 @@ def test_mailbox_selected_bulk_delete_requires_a_selection(client):
     assert "%EC%82%AD%EC%A0%9C%ED%95%A0" in response.headers["location"]
 
 
+def test_mailbox_selected_and_all_counter_extraction(client):
+    with SessionLocal() as db:
+        account = PopAccount(name="test", host="localhost", port=110, username="u",
+                             encrypted_password=encrypt_password("p"), use_ssl=False)
+        db.add(account)
+        db.commit()
+        message_ids = []
+        for subject, body in (
+            ("첫 카운터", "Serial Number: FIRST-001 Black: 10 Color: 20 Total: 30"),
+            ("일반 메일", "카운터 정보가 없는 본문"),
+            ("두 번째 카운터", "Serial Number: SECOND-002 Black: 40 Color: 50 Total: 90"),
+        ):
+            mime = MimeMessage()
+            mime["Subject"] = subject
+            mime.set_content(body)
+            assert store_message(db, account, mime.as_bytes())
+            message_ids.append(db.query(EmailMessage).filter_by(subject=subject).one().id)
+
+    page = client.get("/mail")
+    assert 'formaction="/mail/bulk-extract"' in page.text
+    assert "선택 카운터 추출" in page.text
+    assert "전체 카운터 추출" in page.text
+
+    response = client.post("/mail/bulk-extract", data={
+        "scope": "selected", "message_ids": [message_ids[0], message_ids[1]],
+    }, follow_redirects=False)
+    assert response.status_code == 303
+    assert "%EC%B9%B4%EC%9A%B4%ED%84%B0%201%EA%B1%B4" in response.headers["location"]
+    with SessionLocal() as db:
+        assert [run.email_id for run in db.query(ExtractionRun).all()] == [message_ids[0]]
+
+    response = client.post("/mail/bulk-extract", data={"scope": "all"},
+                           follow_redirects=False)
+    assert response.status_code == 303
+    with SessionLocal() as db:
+        assert [run.email_id for run in db.query(ExtractionRun).all()] == [
+            message_ids[0], message_ids[0], message_ids[2],
+        ]
+
+
+def test_mailbox_selected_counter_extraction_requires_a_selection(client):
+    response = client.post("/mail/bulk-extract", data={"scope": "selected"},
+                           follow_redirects=False)
+    assert response.status_code == 303
+    assert "%EC%B6%94%EC%B6%9C%ED%95%A0" in response.headers["location"]
+
+
 def test_kyocera_counter_is_parsed_from_htm_attachment():
     message = EmailMessage(subject="KYOCERA Counter", sender="device@example.com",
                            text_body="카운터 파일을 첨부합니다.", html_body="", attachments=[])

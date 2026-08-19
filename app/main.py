@@ -768,6 +768,27 @@ def bulk_delete_messages(
     return RedirectResponse(f"/mail?notice={notice}", status_code=303)
 
 
+@app.post("/mail/bulk-extract")
+def bulk_extract_messages(
+    scope: str = Form(...), message_ids: list[int] = Form(default=[]),
+    db: Session = Depends(get_db),
+):
+    if scope not in {"selected", "all"}:
+        raise HTTPException(422, "추출 범위를 올바르게 선택하세요.")
+    query = select(EmailMessage).order_by(EmailMessage.received_at, EmailMessage.id)
+    if scope == "selected":
+        if not message_ids:
+            notice = quote("카운터를 추출할 메일을 선택해 주세요")
+            return RedirectResponse(f"/mail?notice={notice}", status_code=303)
+        query = query.where(EmailMessage.id.in_(set(message_ids)))
+
+    messages = db.scalars(query).all()
+    extracted = sum(process_counter_message(db, message) is not None for message in messages)
+    skipped = len(messages) - extracted
+    notice = quote(f"메일 {len(messages)}건을 확인해 카운터 {extracted}건을 추출했습니다. (정보 없음 {skipped}건)")
+    return RedirectResponse(f"/mail?notice={notice}", status_code=303)
+
+
 @app.get("/mail/{message_id}", response_class=HTMLResponse)
 def mail_detail(message_id: int, request: Request, db: Session = Depends(get_db)):
     message = db.scalar(select(EmailMessage).options(
