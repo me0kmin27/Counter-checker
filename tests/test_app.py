@@ -159,6 +159,39 @@ def test_vendor_counter_formats_are_parsed(subject, body, filename, attachment, 
         assert parsed.captured_at.isoformat() == "2026-08-11T09:50:56+00:00"
 
 
+def test_sindoh_plain_report_takes_priority_over_broad_custom_vendor_rule():
+    message = EmailMessage(
+        subject="카운터 통지메일",
+        text_body=(
+            "[Model Name],\n"
+            "[Serial Number], 800140349718\n"
+            "[Send Date],19/08/26\n"
+            "[Total Counter],00104725\n"
+            "[Total Color Counter],00040612\n"
+            "[Total Black Counter],00064113\n"
+            "[Total Scan/Fax Counter],00031967\n"
+            "[Operating Accumulation Time],  3.8,  8.0,  8.9\n"
+            "[Energizing Accumulation Time],433.9,743.9,720.0\n"
+            "[Standing Accumulation Time],393.8,627.6,602.5\n"
+            "[Power Saving Accumulation Time], 36.3,108.3,108.6"
+        ),
+        html_body="",
+        attachments=[],
+    )
+    broad_samsung_rule = BotRule(
+        brand="삼성", source_type="email", sample_format="",
+        serial_pattern=r"\[Serial Number\],\s*(\d+)",
+        black_pattern=r"Never matches: (\d+)", enabled=True,
+    )
+
+    parsed = parse_counter_message(message, [broad_samsung_rule])
+
+    assert parsed.adapter == "sindoh-plain"
+    assert parsed.serial_number == "800140349718"
+    assert parsed.counters == {"total": 104725, "color": 40612, "black": 64113}
+    assert parsed.captured_at.isoformat() == "2026-08-19T00:00:00+00:00"
+
+
 def test_samsung_body_escaped_fields_supply_machine_serial():
     message = EmailMessage(
         subject="Samsung report",
