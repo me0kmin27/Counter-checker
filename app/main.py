@@ -390,12 +390,16 @@ def _organization_counter_data(organization: Organization) -> list[dict]:
                 by_type.setdefault(kind, []).append(reading)
             for kind, readings in by_type.items():
                 previous = device.initial_color_counter if kind == "color" else device.initial_black_counter
+                device_month_meters: dict[str, int] = {}
                 for reading in sorted(readings, key=lambda item: (item.captured_at, item.id)):
                     month = reading.captured_at.strftime("%Y-%m")
                     latest_month = max(latest_month, month) if latest_month else month
                     row = months.setdefault(month, {"month": month, "black": 0, "color": 0,
                                                      "email_id": reading.run.email_id})
                     row[kind] += max(0, reading.value - previous)
+                    meter_key = f"meter_{kind}"
+                    row[meter_key] = row.get(meter_key, 0) - device_month_meters.get(month, 0) + reading.value
+                    device_month_meters[month] = reading.value
                     previous = reading.value
                     row["email_id"] = reading.run.email_id
     if not latest_month:

@@ -194,6 +194,23 @@ def test_sindoh_plain_report_takes_priority_over_broad_custom_vendor_rule():
     assert parsed.captured_at.isoformat() == "2026-08-19T00:00:00+00:00"
 
 
+def test_sindoh_plain_preserves_full_zero_padded_counter_values():
+    message = EmailMessage(
+        subject="신도리코 카운터 통지",
+        text_body=(
+            "[Model Name],\n[Serial Number], 800101012211\n[Send Date],19/08/26\n"
+            "[Total Counter],00221005\n[Total Color Counter],00036352\n"
+            "[Total Black Counter],00184653\n[Total Scan/Fax Counter],00002375"
+        ),
+        html_body="", attachments=[],
+    )
+
+    parsed = parse_counter_message(message)
+
+    assert parsed.serial_number == "800101012211"
+    assert parsed.counters == {"total": 221005, "color": 36352, "black": 184653}
+
+
 def test_samsung_body_escaped_fields_supply_machine_serial():
     message = EmailMessage(
         subject="Samsung report",
@@ -528,6 +545,8 @@ def test_counter_history_starts_at_usage_date_and_fills_months(client):
 
     assert [row["month"] for row in history] == ["2026-01", "2026-02", "2026-03"]
     assert [row["black"] for row in history] == [0, 0, 600]
+    assert history[-1]["meter_black"] == 700
+    assert history[-1]["meter_color"] == 60
     assert history[-1]["cumulative_black"] == 600
     assert history[-1]["cumulative_black_limit"] == 3000
 
