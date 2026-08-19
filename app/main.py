@@ -363,10 +363,19 @@ def counter_workspace(request: Request, q: str = Query("", max_length=200),
 
 
 def _organization_counter_data(organization: Organization) -> list[dict]:
-    """Convert cumulative device readings into organization-level monthly usage."""
+    """Convert device snapshots into a continuous monthly history.
+
+    The timeline begins with the earliest registered usage start date and ends
+    in the month of the latest collected snapshot.  Empty months are retained
+    so that period summaries do not silently omit their monthly allowance.
+    """
     months: dict[str, dict] = {}
+    started_months: list[str] = []
+    latest_month: str | None = None
     for site in organization.sites:
         for device in site.devices:
+            if device.installed_at:
+                started_months.append(device.installed_at.strftime("%Y-%m"))
             by_type: dict[str, list[CounterReading]] = {}
             has_separate_counters = any(
                 reading.counter_type.lower() in {"black", "color"}
@@ -383,19 +392,35 @@ def _organization_counter_data(organization: Organization) -> list[dict]:
                 previous = device.initial_color_counter if kind == "color" else device.initial_black_counter
                 for reading in sorted(readings, key=lambda item: (item.captured_at, item.id)):
                     month = reading.captured_at.strftime("%Y-%m")
+                    latest_month = max(latest_month, month) if latest_month else month
                     row = months.setdefault(month, {"month": month, "black": 0, "color": 0,
                                                      "email_id": reading.run.email_id})
                     row[kind] += max(0, reading.value - previous)
                     previous = reading.value
                     row["email_id"] = reading.run.email_id
-    result = []
-    for month in sorted(months):
-        row = months[month]
+    if not latest_month:
+        return []
+    first_month = min(started_months) if started_months else min(months)
+    cursor = datetime.strptime(first_month, "%Y-%m")
+    end = datetime.strptime(latest_month, "%Y-%m")
+    result, cumulative_black, cumulative_color = [], 0, 0
+    while cursor <= end:
+        month = cursor.strftime("%Y-%m")
+        row = months.get(month, {"month": month, "black": 0, "color": 0,
+                                 "email_id": None})
+        cumulative_black += row["black"]
+        cumulative_color += row["color"]
         row.update({"black_limit": organization.monthly_black_allowance,
-                    "color_limit": organization.monthly_color_allowance})
+                    "color_limit": organization.monthly_color_allowance,
+                    "cumulative_black": cumulative_black,
+                    "cumulative_color": cumulative_color,
+                    "cumulative_black_limit": organization.monthly_black_allowance * (len(result) + 1),
+                    "cumulative_color_limit": organization.monthly_color_allowance * (len(result) + 1)})
         row["over"] = (max(0, row["black"] - row["black_limit"]) +
                        max(0, row["color"] - row["color_limit"]))
         result.append(row)
+        month_index = cursor.year * 12 + cursor.month
+        cursor = cursor.replace(year=month_index // 12, month=month_index % 12 + 1)
     return result
 
 

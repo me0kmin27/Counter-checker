@@ -1,4 +1,5 @@
 import errno
+from datetime import datetime
 from email.message import EmailMessage as MimeMessage
 from io import BytesIO
 import socket
@@ -24,6 +25,7 @@ from app.pop_service import (
     store_message,
 )
 from app.counter_ingestion import parse_counter_message
+from app.main import _organization_counter_data
 from app.security import decrypt_password, encrypt_password
 
 
@@ -492,6 +494,42 @@ def test_counter_workspace_filters_by_company_and_period(client):
     assert "기간조회 업체" in page.text and "9,876" in page.text
     assert 'value="6" selected' in page.text
     assert client.get("/counters?months=5").status_code == 422
+
+
+def test_counter_history_starts_at_usage_date_and_fills_months(client):
+    with SessionLocal() as db:
+        organization = Organization(name="누적 업체", monthly_black_allowance=1000,
+                                    monthly_color_allowance=200)
+        device = Device(site=Site(name="기본", organization=organization), brand="Acme",
+                        serial_number="ACC-1", normalized_serial="ACC-1",
+                        installed_at=datetime(2026, 1, 15), initial_black_counter=100,
+                        initial_color_counter=10)
+        account = PopAccount(name="test", host="localhost", port=110, username="u",
+                             encrypted_password=encrypt_password("p"), use_ssl=False)
+        db.add_all([organization, account])
+        db.flush()
+        message = EmailMessage(account=account, content_sha256="a" * 64, sender="", recipients="",
+                               subject="", received_at=datetime(2026, 3, 20), raw_message=b"mail")
+        db.add(message)
+        db.flush()
+        run = ExtractionRun(email_id=message.id, adapter="test", adapter_version="1")
+        db.add(run)
+        db.flush()
+        db.add_all([
+            CounterReading(run=run, device=device, counter_type="black", value=700,
+                           captured_at=datetime(2026, 3, 20), confidence=1, raw_text="700"),
+            CounterReading(run=run, device=device, counter_type="color", value=60,
+                           captured_at=datetime(2026, 3, 20), confidence=1, raw_text="60"),
+        ])
+        db.commit()
+        db.refresh(organization)
+
+        history = _organization_counter_data(organization)
+
+    assert [row["month"] for row in history] == ["2026-01", "2026-02", "2026-03"]
+    assert [row["black"] for row in history] == [0, 0, 600]
+    assert history[-1]["cumulative_black"] == 600
+    assert history[-1]["cumulative_black_limit"] == 3000
 
 
 def test_update_pop_account_keeps_password_when_blank(client):
