@@ -1,7 +1,9 @@
 import asyncio
 import calendar
+import io
 import os
 import re
+import zipfile
 from datetime import datetime, time, timezone
 from contextlib import asynccontextmanager, suppress
 from urllib.parse import quote
@@ -19,7 +21,7 @@ from .models import (
     Attachment, BotRule, CounterReading, CounterResolution, Device, DeviceReplacement, EmailMessage,
     ExtractionRun, Organization, PopAccount, ProcessingEvent, Site, User,
 )
-from .pop_service import fetch_account
+from .pop_service import MAX_MESSAGE_BYTES, fetch_account, store_message
 from .counter_ingestion import attachment_to_text, process_counter_message
 from .security import (
     encrypt_password, hash_user_password, new_totp_secret, totp_uri, verify_totp,
@@ -27,6 +29,8 @@ from .security import (
 )
 
 ROLE_LEVEL = {"viewer": 0, "operator": 1, "admin": 2}
+MAX_BACKUP_FILES = 1000
+MAX_BACKUP_BYTES = 500 * 1024 * 1024
 
 
 def _validate_account(name: str, host: str, port: int, username: str) -> tuple[str, str, str]:
@@ -818,6 +822,81 @@ def bulk_extract_messages(
     extracted = sum(process_counter_message(db, message) is not None for message in messages)
     skipped = len(messages) - extracted
     notice = quote(f"메일 {len(messages)}건을 확인해 카운터 {extracted}건을 추출했습니다. (정보 없음 {skipped}건)")
+    return RedirectResponse(f"/mail?notice={notice}", status_code=303)
+
+
+@app.post("/mail/backup")
+def backup_messages(
+    scope: str = Form(...), message_ids: list[int] = Form(default=[]),
+    db: Session = Depends(get_db),
+):
+    """Download selected messages, or the entire mailbox, as portable EML files."""
+    if scope not in {"selected", "all"}:
+        raise HTTPException(422, "백업 범위를 올바르게 선택하세요.")
+    query = select(EmailMessage).order_by(EmailMessage.received_at, EmailMessage.id)
+    if scope == "selected":
+        if not message_ids:
+            notice = quote("백업할 메일을 선택해 주세요")
+            return RedirectResponse(f"/mail?notice={notice}", status_code=303)
+        query = query.where(EmailMessage.id.in_(set(message_ids)))
+    messages = db.scalars(query).all()
+
+    archive = io.BytesIO()
+    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as backup:
+        for message in messages:
+            backup.writestr(f"messages/message-{message.id}.eml", message.raw_message)
+    filename = f"mail-backup-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}.zip"
+    return Response(archive.getvalue(), media_type="application/zip", headers={
+        "Content-Disposition": f'attachment; filename="{filename}"',
+        "X-Content-Type-Options": "nosniff",
+    })
+
+
+@app.post("/mail/upload")
+async def upload_message_backup(
+    account_id: int = Form(...), files: list[UploadFile] = File(...),
+    db: Session = Depends(get_db),
+):
+    """Restore EML files or EML-containing ZIP backups into a POP account."""
+    account = db.get(PopAccount, account_id)
+    if not account:
+        raise HTTPException(404, "업로드할 POP 계정을 찾을 수 없습니다.")
+
+    raw_messages: list[bytes] = []
+    total_size = 0
+
+    def add_message(raw: bytes):
+        nonlocal total_size
+        if not raw or len(raw) > MAX_MESSAGE_BYTES:
+            raise HTTPException(413, "메일 한 건은 25MB 이하만 업로드할 수 있습니다.")
+        total_size += len(raw)
+        if total_size > MAX_BACKUP_BYTES or len(raw_messages) >= MAX_BACKUP_FILES:
+            raise HTTPException(413, "한 번에 최대 1,000건, 압축 해제 기준 500MB까지 업로드할 수 있습니다.")
+        raw_messages.append(raw)
+
+    for upload in files:
+        content = await upload.read(MAX_BACKUP_BYTES + 1)
+        if len(content) > MAX_BACKUP_BYTES:
+            raise HTTPException(413, "업로드 파일은 500MB 이하만 사용할 수 있습니다.")
+        if (upload.filename or "").lower().endswith(".eml"):
+            add_message(content)
+            continue
+        try:
+            with zipfile.ZipFile(io.BytesIO(content)) as backup:
+                members = [item for item in backup.infolist()
+                           if not item.is_dir() and item.filename.lower().endswith(".eml")]
+                if not members:
+                    raise HTTPException(422, "ZIP 파일에 EML 메일이 없습니다.")
+                for member in members:
+                    if member.file_size > MAX_MESSAGE_BYTES:
+                        raise HTTPException(413, "메일 한 건은 25MB 이하만 업로드할 수 있습니다.")
+                    add_message(backup.read(member))
+        except zipfile.BadZipFile as exc:
+            raise HTTPException(422, "EML 또는 올바른 ZIP 백업 파일을 업로드하세요.") from exc
+
+    imported = sum(store_message(db, account, raw) for raw in raw_messages)
+    duplicates = len(raw_messages) - imported
+    notice = quote(f"메일 {imported}건을 업로드했습니다. (중복 {duplicates}건 제외)")
     return RedirectResponse(f"/mail?notice={notice}", status_code=303)
 
 
