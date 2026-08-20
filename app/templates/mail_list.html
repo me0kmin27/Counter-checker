@@ -11,11 +11,23 @@
     <select name="account_id"><option value="">모든 계정</option>{% for a in accounts %}<option value="{{ a.id }}" {% if account_id == a.id %}selected{% endif %}>{{ a.name }}</option>{% endfor %}</select>
     <button class="button ghost">검색</button>{% if q or account_id %}<a class="button ghost" href="/mail">초기화</a>{% endif %}
   </form>
+  <form class="mail-upload" method="post" action="/mail/upload" enctype="multipart/form-data">
+    <label>백업 업로드
+      <input type="file" name="files" accept=".eml,.zip,message/rfc822,application/zip" multiple required>
+    </label>
+    <label>저장 계정
+      <select name="account_id" required><option value="">계정 선택</option>{% for a in accounts %}<option value="{{ a.id }}">{{ a.name }}</option>{% endfor %}</select>
+    </label>
+    <button class="button ghost" {% if not accounts %}disabled title="먼저 POP 계정을 등록하세요"{% endif %}>업로드</button>
+    <small>EML 파일 또는 이 화면에서 내려받은 ZIP 백업을 복원합니다.</small>
+  </form>
   {% if messages %}
   <form id="bulk-mail-form" method="post" action="/mail/bulk-delete">
     <div class="mail-actions"><span id="selection-count" aria-live="polite">선택된 메일 0건</span><div>
       <button class="button ghost selected-action" formaction="/mail/bulk-extract" name="scope" value="selected" data-confirm="선택한 메일에서 카운터를 일괄 추출할까요?" disabled>선택 카운터 추출</button>
       <button class="button ghost" formaction="/mail/bulk-extract" name="scope" value="all" data-confirm="메일함의 모든 메일에서 카운터를 추출할까요?">전체 카운터 추출</button>
+      <button class="button ghost selected-action" formaction="/mail/backup" name="scope" value="selected" disabled>선택 백업</button>
+      <button class="button ghost" formaction="/mail/backup" name="scope" value="all">전체 백업</button>
       <button class="button danger selected-action" name="scope" value="selected" data-confirm="선택한 메일을 삭제할까요?" disabled>선택 삭제</button>
       <button class="button danger" name="scope" value="all" data-confirm="메일함의 모든 메일을 삭제할까요? 이 작업은 되돌릴 수 없습니다.">전체 삭제</button>
     </div></div>

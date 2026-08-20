@@ -1,8 +1,9 @@
 import errno
+import socket
+import zipfile
 from datetime import datetime
 from email.message import EmailMessage as MimeMessage
 from io import BytesIO
-import socket
 from unittest.mock import MagicMock, call, patch
 
 import pytest
@@ -896,6 +897,91 @@ def test_mailbox_selected_bulk_delete_requires_a_selection(client):
                            follow_redirects=False)
     assert response.status_code == 303
     assert "%EC%82%AD%EC%A0%9C%ED%95%A0" in response.headers["location"]
+
+
+def test_mailbox_selected_and_all_backup_download(client):
+    with SessionLocal() as db:
+        account = PopAccount(name="backup", host="localhost", port=110, username="u",
+                             encrypted_password=encrypt_password("p"), use_ssl=False)
+        db.add(account)
+        db.commit()
+        raws = []
+        message_ids = []
+        for subject in ("백업 하나", "백업 둘"):
+            mime = MimeMessage()
+            mime["Subject"] = subject
+            mime.set_content(subject)
+            raw = mime.as_bytes()
+            raws.append(raw)
+            assert store_message(db, account, raw)
+            message_ids.append(db.query(EmailMessage).filter_by(subject=subject).one().id)
+
+    page = client.get("/mail")
+    assert 'formaction="/mail/backup"' in page.text
+    assert "선택 백업" in page.text
+    assert "전체 백업" in page.text
+
+    selected = client.post("/mail/backup", data={
+        "scope": "selected", "message_ids": [message_ids[1]],
+    })
+    assert selected.status_code == 200
+    assert selected.headers["content-type"] == "application/zip"
+    assert "mail-backup-" in selected.headers["content-disposition"]
+    with zipfile.ZipFile(BytesIO(selected.content)) as backup:
+        assert backup.namelist() == [f"messages/message-{message_ids[1]}.eml"]
+        assert backup.read(backup.namelist()[0]) == raws[1]
+
+    complete = client.post("/mail/backup", data={"scope": "all"})
+    with zipfile.ZipFile(BytesIO(complete.content)) as backup:
+        assert len(backup.namelist()) == 2
+
+
+def test_mailbox_uploads_eml_and_restores_zip_backup(client):
+    with SessionLocal() as db:
+        source = PopAccount(name="source", host="localhost", port=110, username="source",
+                            encrypted_password=encrypt_password("p"), use_ssl=False)
+        target = PopAccount(name="target", host="localhost", port=110, username="target",
+                            encrypted_password=encrypt_password("p"), use_ssl=False)
+        db.add_all([source, target])
+        db.commit()
+        source_id, target_id = source.id, target.id
+
+    first = MimeMessage()
+    first["Subject"] = "직접 업로드"
+    first.set_content("EML 본문")
+    response = client.post("/mail/upload", data={"account_id": target_id}, files={
+        "files": ("first.eml", first.as_bytes(), "message/rfc822"),
+    }, follow_redirects=False)
+    assert response.status_code == 303
+
+    second = MimeMessage()
+    second["Subject"] = "ZIP 복원"
+    second.set_content("ZIP 본문")
+    archive = BytesIO()
+    with zipfile.ZipFile(archive, "w") as backup:
+        backup.writestr("messages/second.eml", second.as_bytes())
+    response = client.post("/mail/upload", data={"account_id": source_id}, files={
+        "files": ("backup.zip", archive.getvalue(), "application/zip"),
+    }, follow_redirects=False)
+    assert response.status_code == 303
+    with SessionLocal() as db:
+        messages = db.query(EmailMessage).order_by(EmailMessage.subject).all()
+        assert [(message.subject, message.account_id) for message in messages] == [
+            ("ZIP 복원", source_id), ("직접 업로드", target_id),
+        ]
+
+
+def test_mailbox_upload_rejects_invalid_backup(client):
+    with SessionLocal() as db:
+        account = PopAccount(name="target", host="localhost", port=110, username="target",
+                             encrypted_password=encrypt_password("p"), use_ssl=False)
+        db.add(account)
+        db.commit()
+        account_id = account.id
+    response = client.post("/mail/upload", data={"account_id": account_id}, files={
+        "files": ("broken.zip", b"not a zip", "application/zip"),
+    })
+    assert response.status_code == 422
 
 
 def test_mailbox_selected_and_all_counter_extraction(client):
